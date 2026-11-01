@@ -70,12 +70,16 @@ module.exports = function register(api) {
   // 前端拿 needsAuth 当登录态会在设密码后恒判未登录（gallery 收藏「请先登录」事故根因）。
   routePublic("*", "/api/status", (req, res) => {
     const c = cfg.readConfig();
+    // port 报「实际监听端口」，取自本次请求的 socket（localPort）——这是唯一不会骗人的来源。
+    // 配置里的 port 只是默认值：用 --port / PORT 临时覆盖时它仍是旧值，
+    // 只报配置值会让换端口的人误判服务跑在哪。取不到时回落配置值。
+    const livePort = req && req.socket && req.socket.localPort;
     return sendJson(res, {
       ok: true,
       needsSetup: !c.passwordHash,
       needsAuth: !!c.passwordHash,
       authed: auth.isValidSession(auth.extractToken(req)),
-      port: c.port || 8643,
+      port: livePort || c.port || 8643,
       uptimeSec: Math.max(0, Math.floor((Date.now() - STARTED_AT) / 1000)),
       version: appVersion()
     }, 200);
