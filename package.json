@@ -1,6 +1,6 @@
 {
   "name": "lumigather",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "局域网 Mod 图片画廊：目录浏览、压缩包直出、序列帧合成 GIF",
   "bin": {
     "lumigather": "bin/lumigather.js"
@@ -8,7 +8,8 @@
   "files": [
     "bin/",
     "server/",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "engines": {
     "node": ">=18"
@@ -30,5 +31,9 @@
   "bugs": {
     "url": "https://github.com/EIGHTfs/Lumigather/issues"
   },
-  "homepage": "https://github.com/EIGHTfs/Lumigather#readme"
+  "homepage": "https://github.com/EIGHTfs/Lumigather#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/EIGHTfs/Lumigather.git"
+  }
 }
