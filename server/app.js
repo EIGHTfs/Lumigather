@@ -9,7 +9,7 @@
 // 目录约定：
 //   server/framework/  框架（组装生成，勿手改）
 //   server/lib/        本项目工具与领域逻辑（util/config/scan/archive/gif）
-//   server/routes/     本项目业务路由（browse/archive/gallery/upload/favorites）
+//   server/routes/     本项目业务路由（browse/archive/lumigather/upload/favorites）
 //   server/public/     前端静态页
 //   tools/             ffmpeg + 7zz（外部二进制，不入库）
 //
@@ -43,7 +43,8 @@ const autoUpdateRoutes = require("./routes/auto-update");
 const autoUpdate = require("./lib/auto-update");
 const browse = require("./routes/browse");
 const archive = require("./routes/archive");
-const gallery = require("./routes/gallery");
+// 站点配置路由（原 gallery.js，随项目更名改为 lumigather.js）
+const lumigather = require("./routes/lumigather");
 // 2026-10-12：IO 监测（读/写速率 + 按 label/调用点归因），见 lib/io-monitor.js
 const ioMonitor = require("./lib/io-monitor");
 const upload = require("./routes/upload");
@@ -135,12 +136,17 @@ const archiveRoutes = createRoute({
   "GET /zip/gif": (req, res, c) => archive.apiZipGif(c.query, res),
 });
 
-const galleryRoutes = createRoute({
-  "GET /io": (req, res, c) => gallery.apiIo(req, res, ctx),
-  "GET /gallery": (req, res) => gallery.apiGetGallery(req, res, ctx),
-  "POST /gallery": (req, res) => gallery.apiPostGallery(req, res, ctx),
-  // 索引缓存统计：gallery 专属端点（index-cache 这个 lib 只有本系才有），免鉴权由下方 publicRoutes 放行
-  "GET /index-cache": (req, res) => gallery.apiIndexCache(req, res, ctx),
+const lumigatherRoutes = createRoute({
+  "GET /io": (req, res, c) => lumigather.apiIo(req, res, ctx),
+  // 站点配置：主名 /api/lumigather
+  "GET /lumigather": (req, res) => lumigather.apiGetConfig(req, res, ctx),
+  "POST /lumigather": (req, res) => lumigather.apiPostConfig(req, res, ctx),
+  // 兼容别名 /api/gallery：外部脚本、监控与尚未重跑的旧部署仍在调，内部转调同一处理器。
+  // 新代码只用 /api/lumigather；这条别名属过渡期兼容，不要在上面加新逻辑。
+  "GET /gallery": (req, res) => lumigather.apiGetConfig(req, res, ctx),
+  "POST /gallery": (req, res) => lumigather.apiPostConfig(req, res, ctx),
+  // 索引缓存统计：本系专属端点（index-cache 这个 lib 只有本系才有），免鉴权由下方 publicRoutes 放行
+  "GET /index-cache": (req, res) => lumigather.apiIndexCache(req, res, ctx),
 });
 
 // 上传路由不经 createRoute：它需要原始请求流做 multipart 解析，
@@ -157,7 +163,7 @@ const favRoutes = createRoute({
 // ============================================================
 // schema 缺失时不静默降级：真跑到这一步说明组装没做，明确报错优于神秘 500
 if (!fs.existsSync(path.join(__dirname, "config.schema.json"))) {
-  console.error("❌ 未找到 server/config.schema.json —— 请先运行 ./setup.sh gallery 组装项目层");
+  console.error("❌ 未找到 server/config.schema.json —— 请先在模板仓库运行 bash setup.sh --to <项目>/assemble.json 组装");
   process.exit(1);
 }
 
@@ -188,7 +194,7 @@ createServer({
     { prefix: "", handler: authTable },
     { prefix: "/api", handler: browseRoutes },
     { prefix: "/api", handler: archiveRoutes },
-    { prefix: "/api", handler: galleryRoutes },
+    { prefix: "/api", handler: lumigatherRoutes },
     // 上传：原生 handler（保留原始流做 multipart，勿改用 createRoute）
     { prefix: "/api", handler: upload.uploadRouter },
     { prefix: "/api", handler: favRoutes },
@@ -214,6 +220,8 @@ createServer({
     // 该判定由 routes/upload.js 的 requireAuth 负责，故此处须先放行框架登录门。
     "/api/upload",
     "/api/favorites",
+    // 站点配置：主名 + 兼容别名（两条都要登记，漏一条会让对应路径 401）
+    "/api/lumigather",
     "/api/gallery",
     "/api/zip/",
     "/api/gif",

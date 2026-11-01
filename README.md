@@ -60,7 +60,7 @@ node server/boot.cjs  # 前台直接启动（调试用）
 | 端点 | 方法 | 说明 |
 | --- | --- | --- |
 | `/api/status` | GET | 服务状态与登录态 |
-| `/api/gallery` | GET/POST | 读取或保存站点配置 |
+| `/api/lumigather` | GET/POST | 读取或保存站点配置（`/api/gallery` 为兼容别名） |
 | `/api/directories` | GET | 列出已配置的根目录 |
 | `/api/dir` | GET | 列单层目录与图片 |
 | `/api/images` | GET | 列图片；`root`、`path`、`recursive`、`limit`、`offset` 均可空 |

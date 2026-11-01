@@ -13,8 +13,8 @@
 //
 // 上限：按文件字节数估算占用，超限后淘汰最久未使用的条目。
 //   上限与开关都来自环境变量，不写死在调用处：
-//     GALLERY_INDEX_CACHE=0     关闭缓存（全部走原读盘路径，用于对照与排障）
-//     GALLERY_INDEX_CACHE_MB=N  上限（MB，默认 128）
+//     LUMIGATHER_INDEX_CACHE=0     关闭缓存（全部走原读盘路径，用于对照与排障；旧名 GALLERY_INDEX_CACHE 仍兼容）
+//     LUMIGATHER_INDEX_CACHE_MB=N  上限（MB，默认 128；旧名 GALLERY_INDEX_CACHE_MB 仍兼容）
 //
 // 配置读取时机：**用时读**，不在模块加载时读一次。
 //   项目根的 .env 由配置模块懒加载注入 process.env；若本模块在它之前加载，
@@ -24,6 +24,8 @@
 "use strict";
 
 const fs = require("fs");
+// 环境变量统一读口：新名优先、旧名回退（见 ./env.js）
+const { env, envInt } = require("./env");
 
 const DEFAULT_LIMIT_MB = 128;
 
@@ -32,12 +34,12 @@ const cache = new Map();
 const counters = { hit: 0, miss: 0, stale: 0, evict: 0, invalidate: 0 };
 
 function envEnabled() {
-  const v = process.env.GALLERY_INDEX_CACHE;
+  const v = env("INDEX_CACHE");
   return v !== "0" && v !== "false";
 }
 
 function envLimitBytes() {
-  const mb = Number(process.env.GALLERY_INDEX_CACHE_MB);
+  const mb = envInt("INDEX_CACHE_MB");
   const n = Number.isFinite(mb) && mb > 0 ? mb : DEFAULT_LIMIT_MB;
   return Math.round(n * 1024 * 1024);
 }

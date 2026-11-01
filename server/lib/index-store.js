@@ -37,7 +37,7 @@ function projectRoot() {
   return path.resolve(__dirname, "..", "..");
 }
 
-/** 索引根目录（不存在则在使用时按需创建）；数据根可由 GALLERY_DATA_DIR / DATA_DIR 指定 */
+/** 索引根目录（不存在则在使用时按需创建）；数据根可由 LUMIGATHER_DATA_DIR（旧名 GALLERY_DATA_DIR）/ DATA_DIR 指定 */
 function indexRoot() {
   return path.join(require("./paths").dataRoot(), CACHE_DIRNAME);
 }
@@ -159,7 +159,7 @@ function readDirEntryJsonlFromDisk(category, key) {
  * 读某一目录条目（找不到返回 null）。
  * 默认走整份缓存：递归遍历与单目录读取共用同一份 Map，避免同一文件被读两遍；
  * 单目录读取首次会全量载入，但之后命中缓存——原「扫到命中即停」在目标行靠后时反而更慢。
- * 关闭缓存（GALLERY_INDEX_CACHE=0）时退回原实现，便于对照与排障。
+ * 关闭缓存（LUMIGATHER_INDEX_CACHE=0，旧名 GALLERY_INDEX_CACHE 亦可）时退回原实现，便于对照与排障。
  */
 function readDirEntryJsonl(category, key) {
   if (!indexCache.isEnabled()) return readDirEntryJsonlFromDisk(category, key);

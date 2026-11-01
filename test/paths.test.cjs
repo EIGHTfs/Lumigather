@@ -37,37 +37,50 @@ function withEnv(pairs, fn) {
 }
 
 test("未设环境变量时数据根 = 项目根", () => {
-  withEnv({ GALLERY_DATA_DIR: undefined, DATA_DIR: undefined }, () => {
+  withEnv({ LUMIGATHER_DATA_DIR: undefined, GALLERY_DATA_DIR: undefined, DATA_DIR: undefined }, () => {
     const p = fresh();
     assert.strictEqual(p.dataRoot(), p.PROJECT_ROOT, "仓库态必须落在项目根");
   });
 });
 
-test("GALLERY_DATA_DIR 优先于 DATA_DIR", () => {
-  withEnv({ GALLERY_DATA_DIR: "/tmp/probe-gallery", DATA_DIR: "/tmp/probe-generic" }, () => {
-    assert.strictEqual(fresh().dataRoot(), "/tmp/probe-gallery");
+test("LUMIGATHER_DATA_DIR 优先于 DATA_DIR", () => {
+  withEnv({ LUMIGATHER_DATA_DIR: "/tmp/probe-lumigather", DATA_DIR: "/tmp/probe-generic" }, () => {
+    assert.strictEqual(fresh().dataRoot(), "/tmp/probe-lumigather");
   });
 });
 
 test("只设 DATA_DIR 时采用它", () => {
-  withEnv({ GALLERY_DATA_DIR: undefined, DATA_DIR: "/tmp/probe-generic" }, () => {
+  withEnv({ LUMIGATHER_DATA_DIR: undefined, GALLERY_DATA_DIR: undefined, DATA_DIR: "/tmp/probe-generic" }, () => {
     assert.strictEqual(fresh().dataRoot(), "/tmp/probe-generic");
   });
 });
 
 test("空字符串与纯空白视为未设置", () => {
-  withEnv({ GALLERY_DATA_DIR: "", DATA_DIR: undefined }, () => {
+  withEnv({ LUMIGATHER_DATA_DIR: "", GALLERY_DATA_DIR: undefined, DATA_DIR: undefined }, () => {
     const p = fresh();
     assert.strictEqual(p.dataRoot(), p.PROJECT_ROOT, "空值不应把数据根变成当前工作目录");
   });
-  withEnv({ GALLERY_DATA_DIR: "   ", DATA_DIR: undefined }, () => {
+  withEnv({ LUMIGATHER_DATA_DIR: "   ", GALLERY_DATA_DIR: undefined, DATA_DIR: undefined }, () => {
     const p = fresh();
     assert.strictEqual(p.dataRoot(), p.PROJECT_ROOT, "空白同理");
   });
 });
 
 test("相对路径会被解析成绝对路径", () => {
-  withEnv({ GALLERY_DATA_DIR: "relative-probe", DATA_DIR: undefined }, () => {
+  withEnv({ LUMIGATHER_DATA_DIR: "relative-probe", GALLERY_DATA_DIR: undefined, DATA_DIR: undefined }, () => {
     assert.ok(path.isAbsolute(fresh().dataRoot()), "dataRoot 必须返回绝对路径");
   });
+});
+
+test("旧名 GALLERY_DATA_DIR 仍兼容（新名优先）", () => {
+  // 更名过渡期：老部署 .env 里还是旧前缀，必须继续生效；两套都写时以新名为准。
+  withEnv({ LUMIGATHER_DATA_DIR: undefined, GALLERY_DATA_DIR: "/tmp/probe-legacy", DATA_DIR: undefined }, () => {
+    assert.strictEqual(fresh().dataRoot(), "/tmp/probe-legacy", "只设旧名时仍应生效");
+  });
+  withEnv(
+    { LUMIGATHER_DATA_DIR: "/tmp/probe-new", GALLERY_DATA_DIR: "/tmp/probe-legacy", DATA_DIR: undefined },
+    () => {
+      assert.strictEqual(fresh().dataRoot(), "/tmp/probe-new", "两套名字同时存在时新名优先");
+    },
+  );
 });

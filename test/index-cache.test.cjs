@@ -139,23 +139,25 @@ test("环境变量在模块加载之后设置也生效（.env 懒加载场景）
   // 项目根的 .env 由配置模块懒加载注入 process.env，可能晚于本模块加载。
   // 若本模块在加载时就把值读成快照，.env 里配了也会表现成"没生效"。
   cache.reset();
+  delete process.env.LUMIGATHER_INDEX_CACHE;
+  delete process.env.LUMIGATHER_INDEX_CACHE_MB;
   delete process.env.GALLERY_INDEX_CACHE;
   delete process.env.GALLERY_INDEX_CACHE_MB;
 
   assert.strictEqual(cache.isEnabled(), true, "未设置时默认开启");
   assert.strictEqual(cache.stats().limitBytes, 128 * 1024 * 1024, "未设置时默认 128MB");
 
-  process.env.GALLERY_INDEX_CACHE = "0";
+  process.env.LUMIGATHER_INDEX_CACHE = "0";
   assert.strictEqual(cache.isEnabled(), false, "后置设置的关闭开关必须生效");
 
-  delete process.env.GALLERY_INDEX_CACHE;
-  process.env.GALLERY_INDEX_CACHE_MB = "32";
+  delete process.env.LUMIGATHER_INDEX_CACHE;
+  process.env.LUMIGATHER_INDEX_CACHE_MB = "32";
   assert.strictEqual(cache.stats().limitBytes, 32 * 1024 * 1024, "后置设置的上限必须生效");
 
   cache.setLimitBytes(64 * 1024 * 1024);
   assert.strictEqual(cache.stats().limitBytes, 64 * 1024 * 1024, "显式设置优先于环境变量");
 
-  delete process.env.GALLERY_INDEX_CACHE_MB;
+  delete process.env.LUMIGATHER_INDEX_CACHE_MB;
   cache.reset();
 });
 
@@ -171,4 +173,29 @@ test("loader 抛错时不污染缓存（下次仍会回源）", () => {
   cache.getMap(file, () => { attempts++; return new Map(); });
   assert.strictEqual(attempts, 2, "上次失败不应留下条目，必须再回源");
   cleanup(file);
+});
+
+test("旧前缀 GALLERY_INDEX_CACHE* 仍兼容，且新名优先", () => {
+  // reset() 会清掉显式设置，让读取重新跟随环境变量（见 lib/index-cache.js）
+  cache.reset();
+  delete process.env.LUMIGATHER_INDEX_CACHE;
+  delete process.env.LUMIGATHER_INDEX_CACHE_MB;
+
+  // 只设旧名：关闭开关与上限都必须生效（老部署 .env 的写法）
+  process.env.GALLERY_INDEX_CACHE = "0";
+  process.env.GALLERY_INDEX_CACHE_MB = "16";
+  assert.strictEqual(cache.isEnabled(), false, "旧名关闭开关必须生效");
+  assert.strictEqual(cache.stats().limitBytes, 16 * 1024 * 1024, "旧名上限必须生效");
+
+  // 两套名字同时存在：新名优先
+  process.env.LUMIGATHER_INDEX_CACHE = "1";
+  process.env.LUMIGATHER_INDEX_CACHE_MB = "64";
+  assert.strictEqual(cache.isEnabled(), true, "新名开启应覆盖旧名的关闭");
+  assert.strictEqual(cache.stats().limitBytes, 64 * 1024 * 1024, "新名上限优先于旧名");
+
+  delete process.env.LUMIGATHER_INDEX_CACHE;
+  delete process.env.LUMIGATHER_INDEX_CACHE_MB;
+  delete process.env.GALLERY_INDEX_CACHE;
+  delete process.env.GALLERY_INDEX_CACHE_MB;
+  cache.reset();
 });

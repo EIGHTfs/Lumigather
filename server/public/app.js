@@ -165,9 +165,9 @@
   let favoriteImages = [];       // 收藏图片列表 [{src, name, title, cat, ...}]
   let favoriteSrcs = new Set();  // 收藏 src 集合（快速查找）
   let authedUser = false;        // 是否登录（登录后才能点收藏）
-  let galleryTitle  = "";   // 设置页的标题（/api/gallery → data.title）；空 = 没设过，回退品牌链
+  let galleryTitle  = "";   // 设置页的标题（/api/lumigather → data.title）；空 = 没设过，回退品牌链
   let favicon       = "";   // 由设置页决定：emoji 或图片 URL
-  let brand         = {};   // 品牌默认值（/api/gallery → data.brand）：只做兜底，绝不覆盖设置页的值
+  let brand         = {};   // 品牌默认值（/api/lumigather → data.brand）：只做兜底，绝不覆盖设置页的值
   let loading       = false;
 
   let categories = [];          // [{ name, label, color }]
@@ -458,15 +458,15 @@
     loadCollapsed();
     await refreshAuth();
     try {
-      const data = await window.API.apiGet("/gallery");
+      const data = await window.API.apiGet("/lumigather");
       galleryTitle = data.title || "";   // 设置页的值；空 = 没设过（回退品牌链），不写死默认标题
       favicon      = data.favicon || "";
       brand        = data.brand || {};   // 品牌默认值（env/.env → 清单 brand 段 → 内置默认）
       categories   = Array.isArray(data.categories) ? data.categories : [];
       directories  = Array.isArray(data.directories) ? data.directories : [];
-      window.__GALLERY_FS_ROOT = data.fsRoot || "/";
-      // 每行图片数量（服务端下发：.env GALLERY_IMAGES_PER_ROW → /api/gallery；前端不硬编码，取不到时兜底 20）
-      window.__GALLERY_IMAGES_PER_ROW = Number(data.imagesPerRow) > 0 ? Number(data.imagesPerRow) : 20;
+      window.__LUMIGATHER_FS_ROOT = data.fsRoot || "/";
+      // 每行图片数量（服务端下发：.env LUMIGATHER_IMAGES_PER_ROW → /api/lumigather；前端不硬编码，取不到时兜底 20）
+      window.__LUMIGATHER_IMAGES_PER_ROW = Number(data.imagesPerRow) > 0 ? Number(data.imagesPerRow) : 20;
     } catch (e) {
       console.warn("API init failed:", e);
     }
@@ -1320,7 +1320,7 @@
    *  包进 `.dir-rows`（竖向多行）结构 —— 行数 = ceil(张数 / N)。
    *  为什么放在 render 末尾做一次后处理：图片行有 6 个生成点（叶子文件夹/分组/当前文件夹/压缩包分组…），
    *  统一后处理可一次覆盖全部，且不动任何卡片尺寸语义（卡片样式与尺寸完全不变，只是分行）。
-   *  N 由服务端下发（.env GALLERY_IMAGES_PER_ROW），前端不硬编码；<=1 行时原样不动。 */
+   *  N 由服务端下发（.env LUMIGATHER_IMAGES_PER_ROW），前端不硬编码；<=1 行时原样不动。 */
   function applyImageRowWrap(perRow) {
     const n = Number(perRow) > 0 ? Math.floor(Number(perRow)) : 20;
     const grids = Array.from(document.querySelectorAll("#gallery .dir-grid"));
@@ -1791,7 +1791,7 @@
 
     renderBreadcrumb(images, totalImgs);
     // 2026-10-14 新增：按「每行图片数量」把每个图片行切块成多行（行数 = ceil(张数/N)）
-    applyImageRowWrap(window.__GALLERY_IMAGES_PER_ROW);
+    applyImageRowWrap(window.__LUMIGATHER_IMAGES_PER_ROW);
   }
 
   /* ─── Breadcrumb (hierarchical navigation) ─── */
@@ -2309,7 +2309,7 @@
       </div>
     `;
     dirList.appendChild(li);
-    let cwd = window.__GALLERY_FS_ROOT || "/";
+    let cwd = window.__LUMIGATHER_FS_ROOT || "/";
     const upBtn = li.querySelector(".db-up");
     async function loadDirList(root) {
       try {
@@ -2353,7 +2353,7 @@
     clearTimeout(saveTimer);
     saveTimer = setTimeout(async () => {
       try {
-        await window.API.apiPost("/gallery", { title: galleryTitle, categories, directories });
+        await window.API.apiPost("/lumigather", { title: galleryTitle, categories, directories });
         showNotification(t("settingsSaved"), "success");
         if (reload) await loadAPIImages();
       } catch (e) {
@@ -2404,7 +2404,7 @@
       targetCat = "guest";
     } else {
       // 登录后：可以上传到其他目录（若当前在真实目录，则写文件到该目录；否则存本地）
-      // 分类只从配置来（categories 由 /api/gallery 下发）；拿不到就明确报错终止，不写死任何默认分类
+      // 分类只从配置来（categories 由 /api/lumigather 下发）；拿不到就明确报错终止，不写死任何默认分类
       targetCat = activeFilter !== "all" && activeFilter !== "guest" ? activeFilter : (categories[0]?.name || "");
       if (!targetCat) {
         window.alert("请先在设置里创建分类，或先进入某个分类再上传");

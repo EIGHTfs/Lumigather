@@ -142,7 +142,7 @@ async function apiLogout() {
 // Check if API is available
 async function isAPIAvailable() {
   try {
-    await fetch(API_BASE + '/gallery', FETCH_OPT);
+    await fetch(API_BASE + '/lumigather', FETCH_OPT);
     return true;
   } catch {
     return false;

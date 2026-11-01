@@ -1,7 +1,11 @@
 // ============================================================
-// 拾光集 - 画廊配置路由
-//   GET  /api/gallery  读取配置（不含密码哈希；浏览开放）
-//   POST /api/gallery  保存配置（需登录）
+// 拾光集（Lumigather）- 站点配置路由
+//   GET  /api/lumigather  读取配置（不含密码哈希；浏览开放）
+//   POST /api/lumigather  保存配置（需登录）
+//
+// 兼容别名：/api/gallery 同时保留，内部转调同一处理器。
+//   原因：外部脚本、监控与尚未重跑的旧部署仍会调旧路径，直接删会 404；
+//   新代码一律用 /api/lumigather，别名只作过渡，不要再新增依赖。
 // ============================================================
 "use strict";
 
@@ -19,17 +23,18 @@ function brandOf() {
   return readBrand(path.join(__dirname, ".."));
 }
 
-// GET /api/gallery
-function apiGetGallery(req, res, ctx) {
+// GET /api/lumigather（兼容别名 GET /api/gallery）
+function apiGetConfig(req, res, ctx) {
   jsonRes(res, 200, { ...publicConfig(loadConfig()), brand: brandOf() });
 }
 
 // GET /api/index-cache —— 索引缓存统计（免鉴权：只含计数与上限，不含任何路径或条目内容）
 // 用途：让调用方（含自动化巡检）能直接读出「缓存是否真在生效」，不必用耗时间接推断。
 // 契约：ok / enabled / hit / miss / hitRate / stale / evict / invalidate / entries / bytes / limitBytes
-// enabled=false 表示已用 GALLERY_INDEX_CACHE=0 关闭，此时 hit/miss 不增长属正常现象。
-// 为什么放在 gallery 专属路由：index-cache 这个 lib 只有 gallery 系才有（templates/_gallery/server/lib/），
-// 挂在共用级 routes-auth.js 会让 gbmd/iwara 也拿到一条指向不存在模块的公开端点（必然 500）。
+// enabled=false 表示已用 LUMIGATHER_INDEX_CACHE=0（旧名 GALLERY_INDEX_CACHE 亦可）关闭，
+// 此时 hit/miss 不增长属正常现象。
+// 为什么放在本系专属路由：index-cache 这个 lib 只有本系才有（templates/_lumigather/server/lib/），
+// 挂在共用级 routes-auth.js 会让其它系也拿到一条指向不存在模块的公开端点（必然 500）。
 function apiIndexCache(req, res, ctx) {
   const indexCache = require("../lib/index-cache");
   jsonRes(res, 200, Object.assign({ ok: true }, indexCache.stats()));
@@ -41,8 +46,8 @@ function apiIo(req, res, ctx) {
   jsonRes(res, 200, ioMonitor.snapshot());
 }
 
-// POST /api/gallery — 保存画廊配置（需登录）
-async function apiPostGallery(req, res, ctx) {
+// POST /api/lumigather（兼容别名 POST /api/gallery）— 保存站点配置（需登录）
+async function apiPostConfig(req, res, ctx) {
   if (!ctx.requireAuth(req, res)) return;
   const body = await readJsonBody(req);
   const cfg = loadConfig();
@@ -57,4 +62,4 @@ async function apiPostGallery(req, res, ctx) {
   jsonRes(res, 200, { ok: true, ...publicConfig(cfg), brand: brandOf() });
 }
 
-module.exports = { apiGetGallery, apiPostGallery, apiIo, apiIndexCache };
+module.exports = { apiGetConfig, apiPostConfig, apiIo, apiIndexCache };

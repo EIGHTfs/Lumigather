@@ -35,7 +35,7 @@
 | 配置 | 位置 | 默认 | 作用 |
 | --- | --- | --- | --- |
 | `excludeDirs` | `server/config.json` | `["@eaDir"]` | 扫描时跳过的目录名（群晖缩略图目录等） |
-| `GALLERY_BLACKLIST_DIRS` | `.env` 或启动环境 | 内置系统目录集 | 命中黑名单的路径直接拒绝（403），不进入扫描 |
+| `LUMIGATHER_BLACKLIST_DIRS` | `.env` 或启动环境 | 内置系统目录集 | 命中黑名单的路径直接拒绝（403），不进入扫描 |
 | `noCache` | `/api/images` 请求参数 | 空 | `true` 时跳过结果缓存 |
 
 扫描没有单独的总开关：始终按需执行，缓存随进程存在。

@@ -11,6 +11,8 @@
 
 const fs = require("fs");
 const path = require("path");
+// 环境变量统一读口：新名 LUMIGATHER_* 优先，旧名 GALLERY_* 兼容回退（见 lib/env.js）
+const { env, envInt } = require("./env");
 
 const CONFIG = path.join(__dirname, "..", "config.json");
 
@@ -60,7 +62,7 @@ function getExcludeDirs() {
 }
 
 // ─── 多根目录支持（2026-10-14）──────────────────────────────
-// GALLERY_FS_ROOTS 支持多根，分隔符 : 或 ,（Linux 路径不含冒号，故冒号安全；Windows 盘符场景请只用逗号）
+// LUMIGATHER_FS_ROOTS 支持多根，分隔符 : 或 ,（Linux 路径不含冒号，故冒号安全；Windows 盘符场景请只用逗号）
 function parseRootList(value) {
   if (!value) return [];
   return String(value)
@@ -71,14 +73,14 @@ function parseRootList(value) {
 }
 
 // 允许浏览的根列表（按优先级归一化为数组）：
-//   GALLERY_FS_ROOTS（多值） → GALLERY_FS_ROOT（单值） → config.fsRoots[] → config.fsRoot →
+//   LUMIGATHER_FS_ROOTS（多值） → LUMIGATHER_FS_ROOT（单值） → config.fsRoots[] → config.fsRoot →
 //   已配置目录的公共前缀 → 文件系统根
 // 只保留真实存在的目录；全部不可用时退化为文件系统根（与旧行为一致）。
 function resolveFsRoots(cfg) {
   const c = cfg || loadConfig();
-  const envRoots = parseRootList(process.env.GALLERY_FS_ROOTS).filter((p) => fs.existsSync(p));
+  const envRoots = parseRootList(env("FS_ROOTS")).filter((p) => fs.existsSync(p));
   if (envRoots.length) return envRoots;
-  const envRoot = process.env.GALLERY_FS_ROOT;
+  const envRoot = env("FS_ROOT");
   if (envRoot && fs.existsSync(envRoot)) return [path.resolve(envRoot)];
   const cfgRoots = (Array.isArray(c.fsRoots) ? c.fsRoots : []).map((p) => path.resolve(String(p))).filter((p) => fs.existsSync(p));
   if (cfgRoots.length) return cfgRoots;
@@ -114,7 +116,7 @@ function isWithinAnyRoot(target, roots) {
 // cfg 可选：仅供测试注入，生产调用不传（内部自行 loadConfig）
 // ─── 黑名单排除（2026-10-14 新设计：自由浏览 + 黑名单）────────────────
 // 语义：默认情况下任意绝对路径都可浏览；只有命中黑名单（系统关键目录）的路径才被拒。
-// 旧的白名单语义（GALLERY_FS_ROOT(S) / config.fsRoot(s)）保留为「显式配置则退回白名单模式」的兼容分支。
+// 旧的白名单语义（LUMIGATHER_FS_ROOT(S) / config.fsRoot(s)）保留为「显式配置则退回白名单模式」的兼容分支。
 const DEFAULT_BLACKLIST_DIRS = [
   "/proc", "/sys", "/dev", "/run", "/boot", "/etc", "/bin", "/sbin", "/lib", "/lib64",
   "/usr", "/var", "/tmp",
@@ -132,10 +134,10 @@ function parseDirList(value) {
     .map((s) => path.resolve(s));
 }
 
-/** 实际生效的黑名单：.env GALLERY_BLACKLIST_DIRS → config.blacklistDirs → 内置默认集 */
+/** 实际生效的黑名单：.env LUMIGATHER_BLACKLIST_DIRS → config.blacklistDirs → 内置默认集 */
 function resolveBlacklistDirs(cfg) {
   const c = cfg || loadConfig();
-  const envList = parseDirList(process.env.GALLERY_BLACKLIST_DIRS);
+  const envList = parseDirList(env("BLACKLIST_DIRS"));
   if (envList.length) return envList;
   const cfgList = Array.isArray(c.blacklistDirs) ? parseDirList(c.blacklistDirs.join(":")) : [];
   if (cfgList.length) return cfgList;
@@ -165,8 +167,8 @@ function isBlockedPath(target, cfg) {
 /** 是否显式配置了「白名单根」（env 或 config）——决定采用哪种语义 */
 function hasExplicitWhitelist(cfg) {
   const c = cfg || loadConfig();
-  if (parseRootList(process.env.GALLERY_FS_ROOTS).length) return true;
-  if (process.env.GALLERY_FS_ROOT) return true;
+  if (parseRootList(env("FS_ROOTS")).length) return true;
+  if (env("FS_ROOT")) return true;
   if (Array.isArray(c.fsRoots) && c.fsRoots.length) return true;
   return !!c.fsRoot;
 }
@@ -208,38 +210,18 @@ function browseRoot(query, cfg) {
   return isPathAllowed(want, cfg) ? { root: want, limit, clamped: false } : { root: limit, limit, clamped: true };
 }
 
-// ─── .env 支持（零依赖，只读一次）────────────────────────────
-// 每行 KEY=VALUE，# 开头为注释；不覆盖已存在的真实环境变量（真实 env 优先级最高）。
+// ─── .env 支持 ────────────────────────────────────────────────
+// 装载实现只有一份：lib/env.js 的 loadDotEnvOnce()。env()/envInt() 每次读取前都会确保已装载，
+// 因此这里不再单独调用——既避免两处口径不一致，也不会出现「先读的模块看不到 .env」。
 // 为什么由服务端自己读：start.sh 刻意不 source 外部文件（换环境会找不到 node），故进程启动时读 <项目根>/.env。
-function loadDotEnvOnce() {
-  if (loadDotEnvOnce.__done) return;
-  loadDotEnvOnce.__done = true;
-  try {
-    const p = path.join(path.resolve(__dirname, "..", ".."), ".env");
-    if (!fs.existsSync(p)) return;
-    for (const raw of fs.readFileSync(p, "utf8").split(/\r?\n/)) {
-      const line = raw.trim();
-      if (!line || line.startsWith("#")) continue;
-      const i = line.indexOf("=");
-      if (i <= 0) continue;
-      const k = line.slice(0, i).trim();
-      let v = line.slice(i + 1).trim();
-      if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1);
-      if (!(k in process.env)) process.env[k] = v;
-    }
-  } catch (_) {
-    /* .env 缺失或不可读：忽略，走 config.json / 默认值 */
-  }
-}
 
-// 每行图片数量：.env / 环境变量 GALLERY_IMAGES_PER_ROW → config.imagesPerRow → 默认 20。
-// 前端不得写死，一律经 /api/gallery 下发（见 publicConfig）。
+// 每行图片数量：.env / 环境变量 LUMIGATHER_IMAGES_PER_ROW → config.imagesPerRow → 默认 20。
+// 前端不得写死，一律经 /api/lumigather 下发（见 publicConfig）。
 const DEFAULT_IMAGES_PER_ROW = 20;
 function resolveImagesPerRow(cfg) {
-  loadDotEnvOnce();
   const c = cfg || loadConfig();
-  const env = parseInt(process.env.GALLERY_IMAGES_PER_ROW, 10);
-  if (Number.isFinite(env) && env > 0) return env;
+  const envValue = envInt("IMAGES_PER_ROW");
+  if (Number.isFinite(envValue) && envValue > 0) return envValue;
   const v = parseInt(c.imagesPerRow, 10);
   if (Number.isFinite(v) && v > 0) return v;
   return DEFAULT_IMAGES_PER_ROW;
@@ -247,13 +229,12 @@ function resolveImagesPerRow(cfg) {
 
 // 分层索引深度（2026-10-14 修订）：**默认 0 = 不限制**（保持既有行为：所有层级都索引）。
 // 起因：默认 2 会让配置根下超过 2 层的文件夹（如「角色」目录）不再进索引 ⇒ 前端不显示（回归）。
-// 需要给超大根限深时，用 .env GALLERY_SCAN_MAX_DEPTH 显式设置（例：=2 只扫两层，更深处进入时按需扫）。
+// 需要给超大根限深时，用 .env LUMIGATHER_SCAN_MAX_DEPTH 显式设置（例：=2 只扫两层，更深处进入时按需扫）。
 const DEFAULT_SCAN_MAX_DEPTH = 0;   // 0 = 不限制
 function resolveScanMaxDepth(cfg) {
-  loadDotEnvOnce();
   const c = cfg || loadConfig();
-  const env = parseInt(process.env.GALLERY_SCAN_MAX_DEPTH, 10);
-  if (Number.isFinite(env) && env > 0) return env;
+  const envValue = envInt("SCAN_MAX_DEPTH");
+  if (Number.isFinite(envValue) && envValue > 0) return envValue;
   const v = parseInt(c.scanMaxDepth, 10);
   if (Number.isFinite(v) && v > 0) return v;
   return DEFAULT_SCAN_MAX_DEPTH;
