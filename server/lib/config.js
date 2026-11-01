@@ -14,7 +14,10 @@ const path = require("path");
 // 环境变量统一读口：新名 LUMIGATHER_* 优先，旧名 GALLERY_* 兼容回退（见 lib/env.js）
 const { env, envInt } = require("./env");
 
-const CONFIG = path.join(__dirname, "..", "config.json");
+// 站点配置跟随数据根：以包方式安装时落到 <数据根>/server/config.json，不写进 node_modules
+// （写进去会在升级时被覆盖，且密码哈希会随包分发）。仓库态 dataRoot() 返回项目根，
+// 所以路径与引入数据根之前完全一致。
+const CONFIG = path.join(require("./paths").dataRoot(), "server", "config.json");
 
 const DEFAULT_CONFIG = {
   // 标题默认留空：空 = 「设置页没设过」，前端回退到品牌链（env/.env → 清单 brand 段 → 内置默认）。
@@ -51,6 +54,8 @@ function saveConfig(config) {
   for (const k of BUSINESS_KEYS) {
     if (config[k] !== undefined) raw[k] = config[k];
   }
+  // 首次以包方式运行时 <数据根>/server/ 还不存在，先建目录再写
+  fs.mkdirSync(path.dirname(CONFIG), { recursive: true });
   fs.writeFileSync(CONFIG, JSON.stringify(raw, null, 2), "utf8");
 }
 
