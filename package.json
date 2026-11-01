@@ -8,7 +8,6 @@
   "files": [
     "bin/",
     "server/",
-    "start.sh",
     "README.md",
     ".env"
   ],
@@ -16,9 +15,7 @@
     "node": ">=18"
   },
   "scripts": {
-    "start": "node bin/lumigather.js",
-    "test": "node --test test/*.test.cjs",
-    "prepublishOnly": "node --test test/*.test.cjs"
+    "start": "node bin/lumigather.js"
   },
   "keywords": [
     "gallery",
