@@ -101,4 +101,5 @@ curl 'http://<NAS-IP>:<端口>/api/images?root=/path/to/gallery&recursive=true&l
 | [部署与运维](https://github.com/EIGHTfs/gallery/blob/main/docs/部署与运维.md) | 首次部署、日常操作、迁移核对、已知限制 |
 | [开发与排障](https://github.com/EIGHTfs/gallery/blob/main/docs/开发与排障.md) | 改代码自检步骤、常见现象处理 |
 | [代码组织与文件归属](https://github.com/EIGHTfs/gallery/blob/main/docs/代码组织与文件归属.md) | 各目录职责、通用件与业务代码 |
+| [索引与性能实现](https://github.com/EIGHTfs/gallery/blob/main/docs/索引与性能实现.md) | 性能优化的实现细节、实测数据与踩坑 |
 | [版本记录](https://github.com/EIGHTfs/gallery/blob/main/docs/CHANGELOG.md) | 各版本改动 |
