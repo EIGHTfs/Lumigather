@@ -410,8 +410,17 @@ stop_server() {
 }
 
 status_server() {
+  # 与 start_server 用同一套参数解析：不认 --port 时，用非默认端口起的实例会被判成「未运行」
+  # （下面查监听与 /api/status 都用 port，而 port 默认取自配置里的端口）。
+  local port_opt=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --port) port_opt="${2:-}"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
   local port
-  port="$(config_port)"
+  port="${port_opt:-$(config_port)}"
   echo "======== $PROJECT_NAME ========"
   echo "根目录: $ROOT"
   echo "PID文件: $PID_FILE$([ -f "$PID_FILE" ] && echo " (存在)" || echo " (无)")"
@@ -511,7 +520,7 @@ case "$CMD" in
     sleep 1
     start_server "$@"
     ;;
-  status)  status_server ;;
+  status)  status_server "$@" ;;
   *)
     err "❌ 未知命令: $CMD"
     echo "可用命令: start, stop, restart, status"
