@@ -17,22 +17,21 @@ PROJECT_NAME="$(basename "$ROOT")"
 SERVER_DIR="$ROOT/server"
 
 # ---------- 数据根：写路径一律不许落在包目录里 ----------
-# 为什么不能直接 `PID_FILE="$ROOT/xxx.pid"`：
-#   装成 npm 包后 ROOT = <...>/node_modules/lumigather，PID/日志/配置全落进包目录
-#   ⇒ 升级即丢（npm 会整体替换该目录），且包目录可能只读。
-# 与服务端同一口径（server/lib/config.js 读的是 <dataRoot>/server/config.json）：
-#   ① LUMIGATHER_DATA_DIR / GALLERY_DATA_DIR / DATA_DIR 显式指定 → 用它
-#   ② 没指定且脚本在 node_modules 里（= 以包方式安装）→ 落 ~/.lumigather
-#   ③ 否则（从 git 仓库直接跑）→ 落项目根，保持原有行为一字不变
-if [ -n "${LUMIGATHER_DATA_DIR:-}" ]; then
-  DATA_ROOT="$LUMIGATHER_DATA_DIR"
-elif [ -n "${GALLERY_DATA_DIR:-}" ]; then
-  DATA_ROOT="$GALLERY_DATA_DIR"
+# 为什么不能直接 PID_FILE="$ROOT/xxx.pid"：装成 npm 包后 ROOT=<...>/node_modules/<pkg>，
+#   PID/日志/配置全落进包目录 ⇒ 升级即丢（npm 整体替换该目录），且包目录可能只读。
+# 回落顺序（通用写法，不写死任何项目名）：
+#   ① 项目专属变量 <项目名大写>_DATA_DIR（如 LUMIGATHER_DATA_DIR）—— 以「数据根」为语义的项目
+#   ② DATA_DIR                         —— 框架约定（其语义为 server 目录，见下方 export）
+#   ③ 脚本位于 */node_modules/* 时落 ~/.<项目名>（npm 包运行）
+#   ④ 否则落项目根（从 git 仓库直接跑，行为与改造前一致）
+APP_ENV_NAME="$(printf '%s' "$PROJECT_NAME" | tr '[:lower:]-' '[:upper:]_')_DATA_DIR"
+if [ -n "${!APP_ENV_NAME:-}" ]; then
+  DATA_ROOT="${!APP_ENV_NAME}"
 elif [ -n "${DATA_DIR:-}" ]; then
   DATA_ROOT="$DATA_DIR"
 elif [[ "$ROOT" == */node_modules/* ]]; then
-  DATA_ROOT="$HOME/.lumigather"
-  echo "提示：检测到以 npm 包方式运行，数据根自动落到 $DATA_ROOT（可用 LUMIGATHER_DATA_DIR 覆盖）" >&2
+  DATA_ROOT="$HOME/.${PROJECT_NAME}"
+  echo "提示：检测到以 npm 包方式运行，数据根自动落到 $DATA_ROOT（可用 $APP_ENV_NAME 或 DATA_DIR 覆盖）" >&2
 else
   DATA_ROOT="$ROOT"
 fi
@@ -326,7 +325,11 @@ start_server() {
   #   配置因此落 <数据根>/server/config.json、运行期 json 落 <数据根>/json。
   #   若某个项目的数据根变量语义不同（如以「数据根」为语义的 <APP>_DATA_DIR），
   #   装配到该项目时把这一行换成 export <APP>_DATA_DIR="$DATA_ROOT"，不要两行并存。
+  # 两个变量都导出，覆盖两类项目语义（都以同一个 DATA_ROOT 为源，不会有两套落点）：
+  #   框架项目：DATA_DIR 指向 <数据根>/server（store/json-dir.js 的语义）
+  #   以数据根为语义的项目：<项目名大写>_DATA_DIR 指向 <数据根>
   export DATA_DIR="$DATA_ROOT/server"
+  export "${APP_ENV_NAME}=${DATA_ROOT}"
   rotate_log
   cd "$SERVER_DIR" || exit 1
   # 让服务端与脚本用同一个数据根（否则脚本把 PID/日志写到 A、服务端把缓存写到 B）
