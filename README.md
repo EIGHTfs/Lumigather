@@ -29,15 +29,26 @@
 
 ## 用法
 
-### 启动
+### 启动（两种方式）
+
+从 npm 安装（前台运行，Ctrl-C 结束；数据落 `~/.lumigather`）：
+
+```bash
+npx lumigather --port 8081
+```
+
+从源码仓库运行（后台 + PID + 日志 + 状态，数据落项目目录）：
 
 ```bash
 ./start.sh start      # 后台启动
-./start.sh status     # 查看运行状态
+./start.sh status     # 查看运行状态（含 /api/status 健康检查）
 ./start.sh restart    # 重启
 ./start.sh stop       # 停止
 node server/boot.cjs  # 前台直接启动（调试用）
 ```
+
+> `start.sh` 的 PID 与日志跟随数据根：设了 `LUMIGATHER_DATA_DIR` 就落那里；
+> 在 npm 包目录里运行会自动落 `~/.lumigather`（不会写进 `node_modules`）。
 
 启动后访问 `http://<NAS-IP>:<端口>/`，端口见启动日志与设置页。
 

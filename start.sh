@@ -15,9 +15,31 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_NAME="$(basename "$ROOT")"
 SERVER_DIR="$ROOT/server"
-PID_FILE="$ROOT/${PROJECT_NAME}.pid"
-LOG_FILE="$SERVER_DIR/server.log"
-CONFIG_FILE="$SERVER_DIR/config.json"
+
+# ---------- 数据根：写路径一律不许落在包目录里 ----------
+# 为什么不能直接 `PID_FILE="$ROOT/xxx.pid"`：
+#   装成 npm 包后 ROOT = <...>/node_modules/lumigather，PID/日志/配置全落进包目录
+#   ⇒ 升级即丢（npm 会整体替换该目录），且包目录可能只读。
+# 与服务端同一口径（server/lib/config.js 读的是 <dataRoot>/server/config.json）：
+#   ① LUMIGATHER_DATA_DIR / GALLERY_DATA_DIR / DATA_DIR 显式指定 → 用它
+#   ② 没指定且脚本在 node_modules 里（= 以包方式安装）→ 落 ~/.lumigather
+#   ③ 否则（从 git 仓库直接跑）→ 落项目根，保持原有行为一字不变
+if [ -n "${LUMIGATHER_DATA_DIR:-}" ]; then
+  DATA_ROOT="$LUMIGATHER_DATA_DIR"
+elif [ -n "${GALLERY_DATA_DIR:-}" ]; then
+  DATA_ROOT="$GALLERY_DATA_DIR"
+elif [ -n "${DATA_DIR:-}" ]; then
+  DATA_ROOT="$DATA_DIR"
+elif [[ "$ROOT" == */node_modules/* ]]; then
+  DATA_ROOT="$HOME/.lumigather"
+  echo "提示：检测到以 npm 包方式运行，数据根自动落到 $DATA_ROOT（可用 LUMIGATHER_DATA_DIR 覆盖）" >&2
+else
+  DATA_ROOT="$ROOT"
+fi
+PID_FILE="$DATA_ROOT/${PROJECT_NAME}.pid"
+LOG_FILE="$DATA_ROOT/logs/server.log"
+# 与服务端同源：config.json 在 <数据根>/server/ 下（见 server/lib/config.js）
+CONFIG_FILE="$DATA_ROOT/server/config.json"
 # 默认端口：优先读 server/config.schema.json 的 port.default —— 各项目端口不同
 #   （gallery 8081、gbmd/iwara 8642），通用脚本不该写死某一个项目的端口。
 #   读不到（未声明/无 schema）才回落到 8642。
@@ -297,9 +319,12 @@ start_server() {
     ok "✓ 端口 $port 已释放"
   fi
   rm -f "$PID_FILE"
-  mkdir -p "$SERVER_DIR"
+  # 代码目录 + 数据目录都要在：日志写 <数据根>/logs、配置写 <数据根>/server
+  mkdir -p "$SERVER_DIR" "$DATA_ROOT/logs" "$DATA_ROOT/server"
   rotate_log
   cd "$SERVER_DIR" || exit 1
+  # 让服务端与脚本用同一个数据根（否则脚本把 PID/日志写到 A、服务端把缓存写到 B）
+  export LUMIGATHER_DATA_DIR="$DATA_ROOT"
   local cmd=("$NODE_BIN" boot.cjs)
   if [ -n "$port_opt" ]; then
     export PORT="$port_opt"
