@@ -1,6 +1,6 @@
 {
   "projectName": "gallery",
-  "defaultRepo": "EIGHTfs/gallery",
+  "defaultRepo": "EIGHTfs/Lumigather",
   "extraExclude": [
     "uploads/",
     "favorites.json",

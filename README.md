@@ -1,4 +1,4 @@
-# 拾光集
+# Lumigather · 拾光集
 
 局域网里的 Mod 图片画廊：按目录浏览图片，压缩包内图片直出，序列帧自动合成 GIF。
 
@@ -81,25 +81,25 @@ node server/boot.cjs  # 前台直接启动（调试用）
 
 ```bash
 # 列某个根目录下的全部图片（不传 limit = 全量）
-curl 'http://<NAS-IP>:<端口>/api/images?root=/path/to/gallery&recursive=true'
+curl 'http://<NAS-IP>:<端口>/api/images?root=/path/to/lumigather&recursive=true'
 
 # 只取前 200 条（响应里的 count 仍是总数，returned 是本页数量）
-curl 'http://<NAS-IP>:<端口>/api/images?root=/path/to/gallery&recursive=true&limit=200&offset=0'
+curl 'http://<NAS-IP>:<端口>/api/images?root=/path/to/lumigather&recursive=true&limit=200&offset=0'
 ```
 
 ## 文档索引
 
 | 文档 | 内容 |
 | --- | --- |
-| [架构与数据流](https://github.com/EIGHTfs/gallery/blob/main/docs/架构与数据流.md) | 进程角色、请求链路、数据落点 |
-| [目录与索引机制](https://github.com/EIGHTfs/gallery/blob/main/docs/目录与索引机制.md) | 索引何时建、如何失效、分页字段 |
-| [索引缓存与命中率](https://github.com/EIGHTfs/gallery/blob/main/docs/索引缓存与命中率.md) | 缓存上限与开关、命中率怎么查 |
-| [图片扫描与IO归因](https://github.com/EIGHTfs/gallery/blob/main/docs/图片扫描与IO归因.md) | 哪些请求读盘、分批执行、耗时归因 |
-| [图片缓存与HTTP缓存头](https://github.com/EIGHTfs/gallery/blob/main/docs/图片缓存与HTTP缓存头.md) | 缓存头怎么发、怎么验证生效 |
-| [压缩包与GIF规则](https://github.com/EIGHTfs/gallery/blob/main/docs/压缩包与GIF规则.md) | 直出、翻转判定、序列帧合成判定 |
-| [根目录与排除规则](https://github.com/EIGHTfs/gallery/blob/main/docs/根目录与排除规则.md) | 黑名单模式、排除目录、扫描范围 |
-| [部署与运维](https://github.com/EIGHTfs/gallery/blob/main/docs/部署与运维.md) | 首次部署、日常操作、迁移核对、已知限制 |
-| [开发与排障](https://github.com/EIGHTfs/gallery/blob/main/docs/开发与排障.md) | 改代码自检步骤、常见现象处理 |
-| [代码组织与文件归属](https://github.com/EIGHTfs/gallery/blob/main/docs/代码组织与文件归属.md) | 各目录职责、通用件与业务代码 |
-| [索引与性能实现](https://github.com/EIGHTfs/gallery/blob/main/docs/索引与性能实现.md) | 性能优化的实现细节、实测数据与踩坑 |
-| [版本记录](https://github.com/EIGHTfs/gallery/blob/main/docs/CHANGELOG.md) | 各版本改动 |
+| [架构与数据流](https://github.com/EIGHTfs/Lumigather/blob/main/docs/架构与数据流.md) | 进程角色、请求链路、数据落点 |
+| [目录与索引机制](https://github.com/EIGHTfs/Lumigather/blob/main/docs/目录与索引机制.md) | 索引何时建、如何失效、分页字段 |
+| [索引缓存与命中率](https://github.com/EIGHTfs/Lumigather/blob/main/docs/索引缓存与命中率.md) | 缓存上限与开关、命中率怎么查 |
+| [图片扫描与IO归因](https://github.com/EIGHTfs/Lumigather/blob/main/docs/图片扫描与IO归因.md) | 哪些请求读盘、分批执行、耗时归因 |
+| [图片缓存与HTTP缓存头](https://github.com/EIGHTfs/Lumigather/blob/main/docs/图片缓存与HTTP缓存头.md) | 缓存头怎么发、怎么验证生效 |
+| [压缩包与GIF规则](https://github.com/EIGHTfs/Lumigather/blob/main/docs/压缩包与GIF规则.md) | 直出、翻转判定、序列帧合成判定 |
+| [根目录与排除规则](https://github.com/EIGHTfs/Lumigather/blob/main/docs/根目录与排除规则.md) | 黑名单模式、排除目录、扫描范围 |
+| [部署与运维](https://github.com/EIGHTfs/Lumigather/blob/main/docs/部署与运维.md) | 首次部署、日常操作、迁移核对、已知限制 |
+| [开发与排障](https://github.com/EIGHTfs/Lumigather/blob/main/docs/开发与排障.md) | 改代码自检步骤、常见现象处理 |
+| [代码组织与文件归属](https://github.com/EIGHTfs/Lumigather/blob/main/docs/代码组织与文件归属.md) | 各目录职责、通用件与业务代码 |
+| [索引与性能实现](https://github.com/EIGHTfs/Lumigather/blob/main/docs/索引与性能实现.md) | 性能优化的实现细节、实测数据与踩坑 |
+| [版本记录](https://github.com/EIGHTfs/Lumigather/blob/main/docs/CHANGELOG.md) | 各版本改动 |
