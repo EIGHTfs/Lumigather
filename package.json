@@ -1,6 +1,6 @@
 {
   "name": "lumigather",
-  "version": "1.0.3",
+  "version": "1.0.2",
   "description": "局域网 Mod 图片画廊：目录浏览、压缩包直出、序列帧合成 GIF",
   "bin": {
     "lumigather": "bin/lumigather.js"
