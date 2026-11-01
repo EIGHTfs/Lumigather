@@ -19,8 +19,14 @@ TMP_DIR="$(mktemp -d)"
 cleanup() { rm -rf "$TMP_DIR"; }
 trap cleanup EXIT
 
-# 打真实包（不带 --dry-run，因为要拿到 tgz 才能核对内容）
-TGZ_NAME="$("$NPM_BIN" pack --silent --pack-destination "$TMP_DIR")"
+# 打真实包（不带 --dry-run，因为要拿到 tgz 才能核对内容）。
+# 不使用 --pack-destination：它在 npm publish 的 prepublishOnly 子进程环境里不生效，
+# 产物会落回项目根，导致后面按 TMP_DIR 路径找不到文件、守卫误报「打包失败」。
+# 因此在项目根打包，随即把产物移进临时目录，由 trap 统一清理。
+TGZ_NAME="$("$NPM_BIN" pack --silent)" || { echo "✗ npm pack 执行失败" >&2; exit 1; }
+TGZ_NAME="${TGZ_NAME##*/}"
+[ -n "$TGZ_NAME" ] || { echo "✗ npm pack 未返回产物名" >&2; exit 1; }
+[ -f "$TGZ_NAME" ] && mv -f "$TGZ_NAME" "$TMP_DIR/"
 TGZ="$TMP_DIR/$TGZ_NAME"
 
 if [ ! -f "$TGZ" ]; then

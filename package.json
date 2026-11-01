@@ -17,7 +17,8 @@
   },
   "scripts": {
     "start": "node bin/lumigather.js",
-    "prepublishOnly": "bash scripts/prepublish-guard.sh"
+    "prepublishOnly": "node scripts/prepublish-guard.js",
+    "verify:pack": "bash scripts/verify-pack.sh"
   },
   "keywords": [
     "gallery",
