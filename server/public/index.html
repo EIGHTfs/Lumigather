@@ -3,9 +3,9 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>拾光集</title>
-  <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
-  <link rel="icon" type="image/png" href="./favicon.png" />
+  <!-- 品牌由服务端注入（环境变量 → 项目根 .env → 清单 brand 段 → 内置默认）；图标只留一条，键名 BRAND_ICON -->
+  <title><!-- @brand:title --></title>
+  <link rel="icon" type="image/png" href="@brand:icon@" />
   <link rel="stylesheet" href="./style.css?v=48" />
 </head>
 <body>
@@ -16,7 +16,7 @@
       <button class="sidebar-toggle" id="sidebarToggle" title="Toggle sidebar">◀</button>
       <div class="logo">
         <span class="logo-icon" id="logoIcon">◆</span>
-        <span class="logo-text">Gallery</span>
+        <span class="logo-text"><!-- @brand:displayTitle --></span>
       </div>
       <div class="nav-scroll">
         <nav class="nav" id="nav">

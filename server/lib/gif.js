@@ -15,7 +15,8 @@ const { IMG_EXT_RE } = require("./scan");
 const { SEVEN_ZIP, listArchiveImages, listZipEntriesNode, readZipEntryData, hasIniEntry, readIniSpeed, readArchiveEntryData } = require("./archive");
 const { detectTool } = require("../tool/tool-detect.js");
 
-const CACHE_GIF_DIR = path.join(__dirname, "..", "..", "cache-gifs");
+// 数据根可由 GALLERY_DATA_DIR / DATA_DIR 指定；默认仍是项目根（仓库态行为不变）
+const CACHE_GIF_DIR = path.join(require("./paths").dataRoot(), "cache-gifs");
 
 // ffmpeg 选用：环境变量 > 项目工具目录（tool/ 或 tools/，自带 lib）> 系统路径
 // 统一走 tool/tool-detect.js（存在 + 可执行 + 版本实测，失败自动降级）；

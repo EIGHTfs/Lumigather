@@ -15,7 +15,9 @@ const path = require("path");
 const CONFIG = path.join(__dirname, "..", "config.json");
 
 const DEFAULT_CONFIG = {
-  title: "Gallery",
+  // 标题默认留空：空 = 「设置页没设过」，前端回退到品牌链（env/.env → 清单 brand 段 → 内置默认）。
+  // 这里若写死 "Gallery"，会把品牌链和设置页同时压住——用户看到的水远是 Gallery。
+  title: "",
   categories: [],
   directories: [],
 };
@@ -257,11 +259,27 @@ function resolveScanMaxDepth(cfg) {
   return DEFAULT_SCAN_MAX_DEPTH;
 }
 
+// 旧版本把 title 的默认值写成 "Gallery"（现默认已改为空串）：老部署的 config.json
+// 里可能就存着这份历史默认值。若把它当作「用户在设置页设的值」，它会盖住品牌链
+// （env/.env → 清单 brand 段 → 内置默认）。这里只在**读取下发**时折算成空串，
+// 不写盘、不改用户文件——保存路径仍按原值往返，用户数据一个字都不动。
+// 取舍：用户若真想要标题恰好是 "Gallery" 且只在设置页填过它，会被当成未设置；
+// 这种边缘情况通过「填任意其它值」即可绕过。
+const LEGACY_DEFAULT_TITLE = "Gallery";
+
+// 生效标题：旧默认值（trim 后完全相等）视为未设置 → 返回空串，让前端回落品牌链
+function resolveTitle(cfg) {
+  const raw = cfg && cfg.title;
+  if (typeof raw !== "string") return raw;
+  return raw.trim() === LEGACY_DEFAULT_TITLE ? "" : raw;
+}
+
 // 浏览器不可见密码哈希
 function publicConfig(cfg) {
   const { passwordHash, passwordSalt, ...rest } = cfg;
   return {
     ...rest,
+    title: resolveTitle(cfg),       // 旧默认值 "Gallery" 视为未设置（只在读取时折算，不落盘）
     fsRoot: resolveFsRoot(cfg),     // 向后兼容：单根（取第一个根）
     fsRoots: resolveFsRoots(cfg),   // 多根：全部允许的根（前端可用于目录树/限制提示）
     imagesPerRow: resolveImagesPerRow(cfg),

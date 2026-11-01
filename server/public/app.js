@@ -165,8 +165,9 @@
   let favoriteImages = [];       // 收藏图片列表 [{src, name, title, cat, ...}]
   let favoriteSrcs = new Set();  // 收藏 src 集合（快速查找）
   let authedUser = false;        // 是否登录（登录后才能点收藏）
-  let galleryTitle  = "";   // 标题只由配置下发（/api/gallery → data.title）；不写死任何默认标题
+  let galleryTitle  = "";   // 设置页的标题（/api/gallery → data.title）；空 = 没设过，回退品牌链
   let favicon       = "";   // 由设置页决定：emoji 或图片 URL
+  let brand         = {};   // 品牌默认值（/api/gallery → data.brand）：只做兜底，绝不覆盖设置页的值
   let loading       = false;
 
   let categories = [];          // [{ name, label, color }]
@@ -302,28 +303,51 @@
       .replace(/^-+|-+$/g, "") || "cat-" + Date.now().toString(36);
   }
 
-  /* ─── 标签页标题 + 图标（由设置页/config 决定） ─── */
+  /* ─── 标签页标题 + 图标（设置页 > 品牌链：设置页非空优先，品牌只兜底） ─── */
+  // 图片来源判定：<link rel="icon"> 只吃图片/URL；Emoji 塞进 href 会坏图，Emoji 只留给顶部栏
+  function isImageRef(value) {
+    const v = String(value || "").trim();
+    if (!v) return false;
+    if (/^(?:https?:|data:|\/|\.\/|\.\.\/)/i.test(v)) return true;
+    return /\.(?:png|jpe?g|gif|webp|svg|ico|avif|bmp)(?:[?#]|$)/i.test(v);
+  }
+  // 生效标题：设置页的值非空 → 用它；否则品牌链（env/.env → 清单 brand 段 → 内置默认）；
+  // 两边都空则返回空串，调用方保持页面原有标题，不写死任何默认标题
+  function effectiveTitle() {
+    return String(galleryTitle || "").trim() || String(brand.title || "").trim();
+  }
+  // 顶部栏文字：设置页优先，其次品牌 displayTitle → 品牌 title
+  function applyBrandText() {
+    const text = String(galleryTitle || "").trim()
+      || String(brand.displayTitle || "").trim()
+      || String(brand.title || "").trim();
+    if (!text) return;
+    const el = document.querySelector(".logo-text");
+    if (el) el.textContent = text;
+  }
   // “标签页图标也替换顶部栏的◆这个图标”——favicon 同时更新浏览器标签和顶部栏 logo
   function applyTabMeta() {
-    document.title = galleryTitle || "拾光集";
-    let fav = (favicon || "").trim();
-    let href = "./favicon.svg";
+    const title = effectiveTitle();
+    if (title) document.title = title;
+    // 设置页的值非空且是图片/URL → 用它；否则用品牌图标（BRAND_ICON，约定为图片文件名）
+    const brandIcon = String(brand.icon || "").trim();
+    let href = isImageRef(brandIcon) ? brandIcon : "./favicon.svg";
     let logoContent = "◆"; // 默认
+    const fav = String(favicon || "").trim();
     if (fav) {
-      if (/^https?:\/\//i.test(fav) || fav.startsWith("data:") || fav.startsWith("/") || fav.startsWith("./") || fav.startsWith("..")) {
+      if (isImageRef(fav)) {
         href = fav;
         logoContent = ""; // 图片 URL，用 <img> 显示
       } else {
-        // emoji/单字符 → 内嵌 SVG 生成 data URI
-        const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#7c5cfc"/><text x="32" y="42" font-size="38" text-anchor="middle" dominant-baseline="middle">${escapeHTML(fav)}</text></svg>`;
-        href = "data:image/svg+xml," + encodeURIComponent(svg);
-        logoContent = fav; // emoji 直接显示在顶部栏
+        logoContent = fav; // Emoji/单字符：只做顶部栏图标，不写进 <link rel="icon">
       }
     }
-    // 浏览器标签页图标
-    let icon = document.querySelector('link[rel="icon"]');
-    if (!icon) { icon = document.createElement("link"); icon.rel = "icon"; document.head.appendChild(icon); }
-    icon.href = href;
+    // 浏览器标签页图标：只拿图片/URL 写 href，Emoji 一律不写（否则标签页坏图）
+    if (isImageRef(href)) {
+      let icon = document.querySelector('link[rel="icon"]');
+      if (!icon) { icon = document.createElement("link"); icon.rel = "icon"; document.head.appendChild(icon); }
+      icon.href = href;
+    }
     // 顶部栏 logo 图标（“替换顶部栏的◆”）
     const logoIcon = document.getElementById("logoIcon");
     if (logoIcon) {
@@ -435,8 +459,9 @@
     await refreshAuth();
     try {
       const data = await window.API.apiGet("/gallery");
-      galleryTitle = data.title || "";   // 标题只认配置下发；无配置时留空（由页面/浏览器标题兜底），不写死默认标题
+      galleryTitle = data.title || "";   // 设置页的值；空 = 没设过（回退品牌链），不写死默认标题
       favicon      = data.favicon || "";
+      brand        = data.brand || {};   // 品牌默认值（env/.env → 清单 brand 段 → 内置默认）
       categories   = Array.isArray(data.categories) ? data.categories : [];
       directories  = Array.isArray(data.directories) ? data.directories : [];
       window.__GALLERY_FS_ROOT = data.fsRoot || "/";
@@ -467,11 +492,11 @@
       }
     } catch (_) { /* URL 参数解析失败不影响正常加载 */
     } finally {
-      // 用完即清：地址栏不保留 ?dir=（用户明确要求）
+      // 用完即清：地址栏不保留 ?dir=（交互约定：直达链接只用于本次跳转，不留在可分享的 URL 里）
       try { history.replaceState(null, "", location.pathname); } catch (_) {}
     }
     await loadLang(lang);
-    document.querySelector(".logo-text").textContent = galleryTitle;
+    applyBrandText();   // 顶部栏文字：设置页 → 品牌 displayTitle → 品牌 title
     galleryTitleInput.value = galleryTitle;
     faviconInput.value = favicon;
     applyTabMeta();
@@ -605,7 +630,7 @@
   // onlyRoot：只刷新指定根目录（上传后局部刷新，其他目录保留旧数据）
   // noCache：强制服务端跳过扫描缓存重新扫描（上传后立即看到新图）
   //
-  // 2026-10-15 两步加载（用户要求「当前目录优先，再加载剩下全部」）：
+  // 两步加载（设计约定：当前目录优先，其余随后补齐）：
   //   第一步：只取「当前正在看的那个目录」这一层（recursive=false）＋ 各配置根的根层
   //           —— 服务端只做一次 readdir，毫秒级返回 ⇒ 首屏立刻出图，不必等整棵子树
   //   第二步：再对全部配置根取全量（recursive=true，走按目录索引）⇒ 合并后补齐并更新总数
@@ -2095,8 +2120,8 @@
   loginPassword.addEventListener("keydown", e => { if (e.key === "Enter") doLogin(); });
 
   galleryTitleInput.addEventListener("input", e => {
-    galleryTitle = e.target.value || "Gallery";
-    document.querySelector(".logo-text").textContent = galleryTitle;
+    galleryTitle = e.target.value;   // 清空 = 没设过 → 回退品牌链，不再写死 "Gallery"
+    applyBrandText();
     applyTabMeta();
     saveSettings();
   });
@@ -2108,6 +2133,8 @@
 
   function renderSettings() {
     galleryTitleInput.value = galleryTitle;
+    // 输入框空着时用品牌标题做占位提示：空 = 跟随品牌（env/.env/清单/默认）
+    galleryTitleInput.placeholder = String(brand.title || "").trim() || "My Gallery";
     faviconInput.value = favicon;
     renderCategories();
     renderDirectories();

@@ -37,9 +37,9 @@ function projectRoot() {
   return path.resolve(__dirname, "..", "..");
 }
 
-/** 索引根目录（不存在则在使用时按需创建） */
+/** 索引根目录（不存在则在使用时按需创建）；数据根可由 GALLERY_DATA_DIR / DATA_DIR 指定 */
 function indexRoot() {
-  return path.join(projectRoot(), CACHE_DIRNAME);
+  return path.join(require("./paths").dataRoot(), CACHE_DIRNAME);
 }
 
 /**
@@ -176,8 +176,11 @@ function upsertDirEntryJsonl(category, key, entry) {
   const line = JSON.stringify(Object.assign({ k: key }, entry));
   const out = fs.openSync(tmp, "w");
   let replaced = false;
+  // inFd 必须声明在 try 之外：let 是块级作用域，若声明在 try 块内，finally 访问不到它
+  // ⇒ 输入句柄永远关不掉 ⇒ 每次调用泄漏一个 fd，且目标文件仍被占用，
+  // 在 CIFS/SMB 上 rename 覆盖会直接 EACCES（表现为改写索引必失败）。
+  let inFd = null;
   try {
-    let inFd = null;
     try {
       inFd = fs.openSync(file, "r");
     } catch (_) {
@@ -215,9 +218,9 @@ function upsertDirEntryJsonl(category, key, entry) {
     }
     if (!replaced) fs.writeSync(out, line + "\n");
   } finally {
-    // 必须关掉输入与输出 fd：此前漏关 inFd ⇒ 每扫一个目录泄漏一个 fd，遍历大目录树会把
-    // 进程 fd 耗尽并报 EMFILE（实测部署端 /zip/scan 全部失败、页面无图）
-    try { if (typeof inFd !== "undefined" && inFd !== null) fs.closeSync(inFd); } catch (_) { /* ignore */ }
+    // 输入与输出 fd 都必须关：漏关会每调用泄漏一个 fd（遍历大目录树最终 EMFILE），
+    // 且目标文件未释放时，rename 覆盖在 CIFS/SMB 上会 EACCES。
+    try { if (inFd !== null) fs.closeSync(inFd); } catch (_) { /* ignore */ }
     try { fs.closeSync(out); } catch (_) { /* ignore */ }
   }
   fs.renameSync(tmp, file);

@@ -48,6 +48,8 @@ const gallery = require("./routes/gallery");
 const ioMonitor = require("./lib/io-monitor");
 const upload = require("./routes/upload");
 const favorites = require("./routes/favorites");
+// 品牌配置：@brand:key 占位符的取值，四级兜底（环境变量 → 项目根 .env → 清单 brand 段 → 内置默认），恒有值
+const { readBrand } = require("./config/brand");
 
 const PUBLIC = path.join(__dirname, "public");
 const SESSION_HOURS = 72;
@@ -137,6 +139,8 @@ const galleryRoutes = createRoute({
   "GET /io": (req, res, c) => gallery.apiIo(req, res, ctx),
   "GET /gallery": (req, res) => gallery.apiGetGallery(req, res, ctx),
   "POST /gallery": (req, res) => gallery.apiPostGallery(req, res, ctx),
+  // 索引缓存统计：gallery 专属端点（index-cache 这个 lib 只有本系才有），免鉴权由下方 publicRoutes 放行
+  "GET /index-cache": (req, res) => gallery.apiIndexCache(req, res, ctx),
 });
 
 // 上传路由不经 createRoute：它需要原始请求流做 multipart 解析，
@@ -161,7 +165,7 @@ if (!fs.existsSync(path.join(__dirname, "config.schema.json"))) {
 // 运行时由组装器从 public/fragments/ 取对应片段替换。缺这段，页面会原样输出 @frag 注释
 // （页面看着「没坏」但内容全是空 / 样式全丢 —— 2026-09-28 实测踩坑：style.css 拆成
 //   @frag 骨架后 gallery 未接入组装器，CSS 全部丢失）。
-// pages：页面名 → 框架文件；style.css 也走片段。brand：gallery 无 @brand 指令，传 null。
+// pages：页面名 → 框架文件；style.css 也走片段。brand：@brand:key 占位符的取值（见 ./config/brand）。
 const FRAGMENT_PAGES = ["index.html", "style.css"];
 const fragmentPages = {};
 for (const name of FRAGMENT_PAGES) {
@@ -174,7 +178,7 @@ createServer({
   auth: fwAuth,
   publicDir: PUBLIC,
   fragments: Object.keys(fragmentPages).length
-    ? { dir: path.join(PUBLIC, "fragments"), pages: fragmentPages, watch: true, brand: null }
+    ? { dir: path.join(PUBLIC, "fragments"), pages: fragmentPages, watch: true, brand: readBrand(__dirname) }
     : null,
   routes: [
     // 鉴权路由（登录/登出/状态/改密）：表内写的是【全路径】/api/login，

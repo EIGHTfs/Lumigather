@@ -1,0 +1,37 @@
+{
+  "name": "lumigather",
+  "version": "1.0.0",
+  "description": "局域网 Mod 图片画廊：目录浏览、压缩包直出、序列帧合成 GIF",
+  "bin": {
+    "lumigather": "bin/lumigather.js"
+  },
+  "files": [
+    "bin/",
+    "server/",
+    "start.sh",
+    "README.md",
+    ".env"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node bin/lumigather.js",
+    "test": "node --test test/*.test.cjs",
+    "prepublishOnly": "node --test test/*.test.cjs"
+  },
+  "keywords": [
+    "gallery",
+    "image-viewer",
+    "nas",
+    "mod",
+    "zip",
+    "gif"
+  ],
+  "author": "EIGHTfs",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/EIGHTfs/gallery/issues"
+  },
+  "homepage": "https://github.com/EIGHTfs/gallery#readme"
+}

@@ -34,7 +34,7 @@ const PATTERNS = [
 /** 待扫描的前端产物（按存在性取第一个） */
 const CANDIDATES = [
   "server/public/app.js",
-  "templates/_gallery/js/app.js",
+  "templates/_lumigather/js/app.js",
   "js/app.js",
 ];
 

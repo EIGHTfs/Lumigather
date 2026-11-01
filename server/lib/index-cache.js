@@ -1,5 +1,5 @@
 // ============================================================
-// 索引内存缓存：按「文件 mtime + 毫秒 + size」失效的 LRU
+// 索引内存缓存：按「文件 mtime + size」失效的 LRU
 //
 // 为什么需要：索引读路径（readDirEntryJsonl / loadAllJsonl）此前每次调用
 //   都从磁盘重读整份文件 —— 大分类索引达 94MB / 2 万余行，同一份数据被
@@ -16,8 +16,10 @@
 //     GALLERY_INDEX_CACHE=0     关闭缓存（全部走原读盘路径，用于对照与排障）
 //     GALLERY_INDEX_CACHE_MB=N  上限（MB，默认 128）
 //
-// 并发：Node 单线程 + 同步读，getMap 内部没有 await 间隙，
-//   同一个文件不会被两个请求重复回源。
+// 配置读取时机：**用时读**，不在模块加载时读一次。
+//   项目根的 .env 由配置模块懒加载注入 process.env；若本模块在它之前加载，
+//   加载时读到的永远是「未设置」，表现为 .env 里配了却不生效。
+//   显式调用 setEnabled / setLimitBytes 后，以显式值为准。
 // ============================================================
 "use strict";
 
@@ -40,8 +42,17 @@ function envLimitBytes() {
   return Math.round(n * 1024 * 1024);
 }
 
-let enabled = envEnabled();
-let limitBytes = envLimitBytes();
+/** 显式设置值；null 表示未设置，跟随环境变量 */
+let explicitEnabled = null;
+let explicitLimitBytes = null;
+
+function currentEnabled() {
+  return explicitEnabled === null ? envEnabled() : explicitEnabled;
+}
+
+function currentLimitBytes() {
+  return explicitLimitBytes === null ? envLimitBytes() : explicitLimitBytes;
+}
 
 /** 文件指纹；文件不存在返回 null（不缓存不存在的文件） */
 function fingerprint(file) {
@@ -61,7 +72,8 @@ function totalBytes() {
 
 /** 淘汰最久未使用的条目，直到回到上限内；至少保留一条，避免超大文件永远无法缓存 */
 function evictIfNeeded() {
-  while (cache.size > 1 && totalBytes() > limitBytes) {
+  const limit = currentLimitBytes();
+  while (cache.size > 1 && totalBytes() > limit) {
     const oldestKey = cache.keys().next().value;
     const item = cache.get(oldestKey);
     cache.delete(oldestKey);
@@ -77,7 +89,7 @@ function evictIfNeeded() {
  * @returns {Map}
  */
 function getMap(file, loader) {
-  if (!enabled) return loader();
+  if (!currentEnabled()) return loader();
   const fp = fingerprint(file);
   const hit = cache.get(file);
   if (hit && fp && hit.mtimeMs === fp.mtimeMs && hit.size === fp.size) {
@@ -108,8 +120,8 @@ function stats() {
   return Object.assign({}, counters, {
     entries: cache.size,
     bytes: totalBytes(),
-    limitBytes: limitBytes,
-    enabled: enabled,
+    limitBytes: currentLimitBytes(),
+    enabled: currentEnabled(),
     // 命中率（百分数，保留 1 位）：分母只取「有明确结论的访问」= 命中 + 未命中；stale 已计入 miss
     hitRate: total > 0 ? Math.round((counters.hit / total) * 1000) / 10 : 0,
   });
@@ -117,19 +129,20 @@ function stats() {
 
 /** 供调用方判断是否走「整份载入」的快路径；关闭缓存时应保留各自的原读盘实现 */
 function isEnabled() {
-  return enabled;
+  return currentEnabled();
 }
 
 function setEnabled(v) {
-  enabled = !!v;
-  if (!enabled) cache.clear();
+  explicitEnabled = !!v;
+  if (!explicitEnabled) cache.clear();
 }
 
 function setLimitBytes(n) {
-  limitBytes = Math.max(1, Math.round(Number(n) || 0));
+  explicitLimitBytes = Math.max(1, Math.round(Number(n) || 0));
   evictIfNeeded();
 }
 
+/** 测试用：清空条目、计数与显式设置（让下一次调用重新跟随环境变量） */
 function reset() {
   cache.clear();
   counters.hit = 0;
@@ -137,6 +150,8 @@ function reset() {
   counters.stale = 0;
   counters.evict = 0;
   counters.invalidate = 0;
+  explicitEnabled = null;
+  explicitLimitBytes = null;
 }
 
 module.exports = {

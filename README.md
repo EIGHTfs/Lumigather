@@ -1,405 +1,104 @@
-# 拾光集 — 局域网 Mod 图片画廊
+# 拾光集
 
-> 访问入口：`http://<NAS-IP>:8081/`（如 `http://10.10.10.193:8081/`）。
-> **零依赖**：纯 Node.js 内置模块（`http`/`fs`/`path`/`crypto`/`zlib`/`child_process`），
-> 不依赖 express/cors/multer，不需要 npm install，不需要 python3 静态服务。
->
-> **2026-09-19 起接入 `dl-server-template` 框架**：HTTP 服务/鉴权/路由工厂/配置/自动更新
-> 改用框架通用件，项目只保留业务代码。前端与后端资产由 `assemble.json` 声明、
-> `setup.sh` 组装生成（`server/core/` 等 8 个框架子目录与 `server/boot.cjs` 是**模板下发件**，已入库）。
-> 本次改动见 `CHANGELOG-框架接入.md`。
+局域网里的 Mod 图片画廊：按目录浏览图片，压缩包内图片直出，序列帧自动合成 GIF。
 
-## 一、项目是什么
+## 功能
 
-一个跑在 NAS 局域网里的图片浏览画廊：按文件目录层级浏览图片、压缩包内图直出（含 ini 的 mod 图片自动 180° 翻转）、序列帧合成 GIF（按包名间隔或 ini 的 `$speed` 换算帧率）、侧边栏目录树、分类筛选、i18n 中英、设置页（标题/图标/分类/目录/上传）、可选登录保护设置页。
+| 功能 | 做什么 | 入口 |
+| --- | --- | --- |
+| 目录浏览 | 按文件系统层级浏览图片，侧边栏目录树、面包屑导航 | 页面 |
+| 分类筛选 | 按配置的分类过滤图片；支持搜索与排序（名称/数量/时间） | 页面 |
+| 压缩包直出 | 不解压，直接显示 zip/7z/rar 内的图片 | `/api/zip/img` |
+| 贴图翻转 | 压缩包含 ini 时，被 ini 声明的贴图自动 180° 翻转 | `/api/zip/img` |
+| 序列帧合成 | 按包名间隔或 ini 的 `$speed` 换算帧率，合成 GIF | `/api/zip/gif`、`/api/gif` |
+| 上传 | 上传图片到指定目录 | `/api/upload` |
+| 收藏 | 收藏图片与目录，按分类归组 | `/api/favorites` |
+| 多语言 | 中英切换，语言包随页面加载 | 页面 |
+| 设置页 | 标题、图标、分类、目录、访问密码、自动更新 | 页面 |
+| 自动更新 | 定时从 GitHub 拉取新版并重启 | `/api/auto-update/status` |
+| 目录索引缓存 | 目录索引常驻内存、按 mtime 失效；命中率可查 | `/api/index-cache` |
+| 结果分页 | 图片列表支持 `limit`/`offset`，默认返回全量 | `/api/images` |
 
-**一个进程同时服务静态页 + API**（`./start.sh` 或 `node server/boot.cjs`），不需要额外开 python3 静态服务器，不需要 node_modules。
+## 环境要求
 
-- 页面 + API：`http://<NAS-IP>:8081/`（同一个进程）
+| 项目 | 要求 |
+| --- | --- |
+| 运行时 | Node.js 18 或更高；零第三方依赖，不需要安装依赖 |
+| 平台 | Linux / macOS / Windows |
+| 外部工具 | `ffmpeg`（GIF 合成）、`7z`（压缩包读取）——运行时自动探测，不随程序分发 |
 
-## 二、快速启动
+## 用法
 
-后端 `server/`，网页 `server/public/`，启动 `./start.sh`（默认 **restart**）。
-
-```bash
-cd <项目根>
-./start.sh                     # 默认 restart，端口自动读 config.schema.json（8081）
-./start.sh start
-./start.sh stop
-./start.sh status              # 进程/监听/HTTP 健康检查/日志尾
-./start.sh --port 9000         # 临时换端口
-./start.sh --set-password "新密码"
-```
-
-`start.sh` 是 `dl-server-template` 的**通用启停脚本**（三项目同一份，md5 一致）：
-PID 落项目根 `<项目名>.pid`、启动前等端口真正释放、8 秒健康检查 `/api/status`、
-日志超 10MB 自动轮转、`setsid` 守护（脱离终端）。默认端口按 `config.schema.json`
-的 `port.default` 自动取值，故各项目无需改脚本。
-
-**局域网访问**：服务监听 `::`（含 IPv4），不绑 127.0.0.1，局域网设备可直接访问
-`http://<NAS-IP>:8081/`。
-
-改完前端/后端代码后：**必须升 index.html 里的 `?v=` 版本号**（当前 43），否则用户浏览器缓存旧 JS/CSS 不生效（强刷 `Ctrl+F5` 可绕过，但对外发布务必升版本号）。
-
-## 三、文件左右（文件结构说明）
-
-**装配层**（项目自研，入库）：
-
-| 文件 | 作用 |
-|---|---|
-| `assemble.json` | 组装清单：声明从模板取哪些文件到本项目（键=模板内路径，值=本项目路径） |
-| `server/app.js` | 入口装配：创建 config/auth、挂路由表、注入 autoUpdate |
-| `server/boot.cjs` | CJS 启动器（**.cjs 强制按 CommonJS 加载**，避免父目录 `type:module` 把 `.js` 当 ESM） |
-| `server/config.schema.json` | 配置 schema（默认端口 8081 等） |
-| `start.sh` | 通用启停脚本（见上） |
-
-**业务代码**（项目自研，入库）：
-
-| 文件 | 作用 |
-|---|---|
-| `server/lib/config.js` | 画廊配置读写（分类/目录），**写盘时保留密码哈希** |
-| `server/lib/scan.js` | 目录递归扫图 + mtime 缓存（首次 9.7s → 缓存 0.19s） |
-| `server/lib/archive.js` | 压缩包索引/取图（zip 自解析 + GBK 回退、7zz/rar；ini 条目检测与 `$speed` 解析） |
-| `server/lib/gif.js` | 序列帧合成 GIF（ffmpeg；含 ini 的 mod 图片 180° 翻转、按 ini `$speed` 换算帧间隔） |
-| `server/lib/util.js` | 通用件：jsonRes/streamFile/parseQuery/readMultipartUpload 等 |
-| `server/lib/auto-update.js` | 自动更新实例（引框架工厂 + 传 gallery 参数与排除项） |
-| `server/routes/browse.js` | 浏览：`/api/directories`、`/api/images`、`/api/media`、`/api/dir` |
-| `server/routes/gallery.js` | 设置读写：`GET/POST /api/gallery`、`GET /api/io`（IO 归因：byLabel + bySite，需登录） |
-| `server/routes/upload.js` | 上传（原生 handler，**绕开 createRoute 的 JSON 预读**） |
-| `server/routes/favorites.js` | 收藏增删查 |
-| `server/routes/archive.js` | 压缩包内图 / zip 内 GIF |
-| `server/routes/auth.js` | 认证路由**装配**（复用框架通用件，不手写端点逻辑） |
-| `server/routes/auto-update.js` | 自动更新路由**装配**（同上） |
-
-**模板下发件**（从模板下发，已入库）：
-
-| 文件 | 作用 |
-|---|---|
-| `server/core/` `server/route/` `server/auth/` `server/http/` | 框架通用件（按功能分层）：入口/路由工厂/鉴权/HTTP 工具 |
-| `server/config/` `server/store/` `server/update/` `server/assemble/` | 框架通用件：配置加载/数据存储/自动更新/片段组装 |
-| `server/lib/cjs-bootstrap.cjs` | CJS 劫持（由 setup.sh 下发） |
-
-**运行态**（gitignore）：
-
-| 文件 | 作用 |
-|---|---|
-| `server/config.json` | 设置：title/favicon/categories/directories/密码哈希。**实时读**，改完无需重启 |
-| `server/sessions.json` / `server/favorites.json` | 会话 / 收藏持久化 |
-| `server/public/` | 网页（模板下发，含风格层素材） |
-| `tools/` | `7zz`、`ffmpeg`/`ffmpeg-lib`（154M，不入库） |
-| `uploads/` / `cache-gifs/` | 游客上传 / GIF 缓存 |
-
-## 三之二、接入 dl-server-template 框架（2026-09-19）
-
-### 为什么接
-
-原 `server/app.js` 是 1152 行单体：手写 `http.createServer` + `switch` 路由 + 内联全部业务逻辑；
-`server/auth.js` 是 89 行自研鉴权（scrypt + 内存 Map 会话 + 手写 cookie）。这些能力
-`dl-server-template` 已有通用实现，且 gbmd/iwara 两个项目在共用——继续自带一份就是重复维护。
-
-### 现在的分层
-
-```
-server/app.js          ← 装配层：建 config/auth → 挂路由表 → 启动（只做组装，不写业务）
-  ├─ framework/        ← 框架通用件（组装下发）：HTTP、鉴权、路由工厂、配置、备份、自动更新
-  ├─ lib/              ← 项目业务能力：config / scan / archive / gif / util
-  └─ routes/           ← 项目业务路由：browse / gallery / upload / favorites / archive
-                          auth / auto-update 只做「装配」，端点逻辑复用框架通用件
-```
-
-**业务路由新增或修改**：在 `server/routes/` 下按表式写（`createRoute`），在 `app.js` 的路由表里挂载。
-
-### 两条必须知道的框架约定
-
-**① createRoute 会预读 POST body（按 JSON 解析）**
-框架对 POST 请求会先按 `utf8 + JSON.parse` 预读 body。**上传是 multipart，不能用
-`createRoute`**，必须是原生 handler（见 `routes/upload.js`，挂载时传 `{ handler }`）。
-用 `createRoute` 处理 multipart 会把二进制按 utf8 解码导致文件损坏。
-
-**② 原生 handler 的 ctx 只有 `{cfg, auth, sendJson}`**
-`createServer` 内部组装的 ctx 是固定的三个字段，**不包含 app.js 里自定义的 `ctx`**
-（`requireAuth` 等）。原生 handler 里要用鉴权须自行判定，或从 `require("../framework")` 取
-`auth.extractToken/isValidSession`（见 `routes/upload.js` 的 `requireAuth()`）。
-
-### 通用件复用的两种范式
-
-框架通用件（`framework/route/routes-auth.js`、`framework/route/routes-auto-update.js`）写的是**闭包式**
-`module.exports = function register(api) { api.route("GET","/api/x",fn) }`（为 iwara 的
-`route-registry` 设计），而本项目走 **表式** `createRoute`。
-
-这两套范式曾导致 gbmd/gallery 各自手抄一份同逻辑的表式实现——正是通用件注释里
-吐槽的「逻辑漂移」来源。现已用 `framework/route/routes-adapter.js` 的 `tableFromRegister()`
-把闭包式转成表式，表式项目可直接复用同一份通用件：
-
-```js
-// server/routes/auth.js —— 只做装配，不写端点逻辑
-const { tableFromRegister } = require("../framework/route/routes-adapter");
-const routesAuth = require("../framework/route/routes-auth");
-function init(deps) {
-  table = tableFromRegister(routesAuth, { sendJson, readBody, cfg: deps.cfg, auth,
-                                          setSessionCookie: auth.setSessionCookie });
-  return table;
-}
-```
-
-效果：`routes/auth.js` 89 → 44 行，`routes/auto-update.js` 89 → 37 行，且三项目共用同一份端点逻辑。
-
-### 组装与重建
+### 启动
 
 ```bash
-# 项目根有 assemble.json 声明取件清单；改完模板后重新组装：
-<模板仓库>/setup.sh gallery --to <项目根>/server
-
-# 校验清单一致性（模板源 → 项目目标 逐文件 md5 比对）
-<模板仓库>/setup.sh gallery --to <项目根>/server --check
+./start.sh start      # 后台启动
+./start.sh status     # 查看运行状态
+./start.sh restart    # 重启
+./start.sh stop       # 停止
+node server/boot.cjs  # 前台直接启动（调试用）
 ```
 
-`server/core/` 等 8 个框架子目录、`server/boot.cjs`、`server/lib/cjs-bootstrap.cjs` 是**模板下发件**
-（权威源在模板仓库，由 `setup.sh` 按 `assemble.json` 下发到项目侧），**必须入库、不忽略**：
-部署端以 github 模式的远程 `auto-update` 从本仓库拉取代码，被忽略的文件不进仓库 = 部署端永远拿不到新版；
-`server/update/auto-update.js` 本身就是自动更新的实现，忽略它等于让它无法自更新。
-模板更新后仍走 `setup.sh` 重新组装下发，勿手改（改在项目侧会被 `--check` 报不一致）。
+启动后访问 `http://<NAS-IP>:<端口>/`，端口见启动日志与设置页。
 
----
+### 面板与设置页
 
-## 四、架构与工作方式
+| 操作 | 说明 |
+| --- | --- |
+| 分类按钮 | 切换分类；「全部」显示未分类内容 |
+| 侧边栏 | 目录树，按目录跳转 |
+| 搜索框 | 在当前分类内按文件名搜索 |
+| 排序按钮 | 名称 / 数量 / 时间 |
+| 设置 → 标题与图标 | 修改站点标题、favicon（Emoji 或图片 URL）；**设置值优先**，没设时用品牌默认（`BRAND_*` 环境变量 → `.env` → `assemble.json` 的 `brand` 段 → 内置默认）。Emoji 只用于顶栏图标，不写进 `<link rel="icon">` |
+| 设置 → 分类 | 增删分类，设置颜色与显示名 |
+| 设置 → 目录 | 添加图片根目录，指定所属分类 |
+| 设置 → 密码 | 设置或修改访问密码（设置页需登录） |
+| 设置 → 自动更新 | 开关、模式、间隔，可立即检查更新 |
 
-### 数据流
-```
-NAS 磁盘目录/压缩包 ──> routes/browse.js ──GET /api/directories、/api/images、/api/media──> 前端渲染
-config.json ──────────────────────────── GET/POST /api/gallery（设置，POST 需登录）
-框架 routes-auth ─────────────────────── /api/login、/api/logout、/api/status、/api/change-password
-```
+### HTTP API
 
-- 浏览（GET /api/*）：游客可访问全部内容。
-- 设置（POST /api/gallery、上传到真实目录、收藏增删）：设置了密码后需登录（未设密码则开放）。
-
-### API 一览
-
-**浏览类**（`routes/browse.js`、`routes/archive.js`）：
-
-| API | 作用 | 鉴权 |
-|---|---|---|
-| `GET /api/directories` | 目录列表 | 开放 |
-| `GET /api/images` | 图片列表（含目录扫描、zip 扫描） | 开放 |
-| `GET /api/media?file=` | 图片流 | 开放 |
-| `GET /api/dir?path=` | 单目录内容（侧边栏树） | 开放 |
-| `GET /api/zip/scan?dir=` | 压缩包条目 `{path,name,images,hasIni,speed}`（`hasIni`=含 `.ini` 的 mod 包，`speed`=ini 里的动画速度） | 开放 |
-| `GET /api/zip/img?path=&file=` | 压缩包内图片（含 ini 的 mod 包自动 180° 翻转输出） | 开放 |
-| `GET /api/gif?dir=&dur_ms=` | 目录内序列帧合成 GIF | 开放 |
-| `GET /api/zip/gif?path=&dur_ms=&fps=` | 压缩包内序列帧合成 GIF（`dur_ms`=包名间隔；`fps` 仅供 ini `$speed` 换算，默认 60） | 开放 |
-
-**业务类**（项目路由）：
-
-| API | 作用 | 鉴权 |
-|---|---|---|
-| `GET /api/gallery` | 读设置（剥离密码哈希） | 开放 |
-| `POST /api/gallery` | 保存设置 | **需登录** |
-| `POST /api/upload` | 上传（无 targetDir → 本地 uploads/；有 targetDir → 写入真实目录） | 开放（无 targetDir）/**需登录**（有 targetDir） |
-| `GET /api/favorites` | 收藏列表 | 开放 |
-| `POST /api/favorites` | 添加收藏 | **需登录** |
-| `DELETE /api/favorites` | 移除收藏 | **需登录** |
-| `GET /api/uploaded` | 列出本地 uploads/ 图片 | 开放 |
-
-**认证类**（框架通用件 `framework/route/routes-auth.js`，经 `routes/auth.js` 装配）：
-
-| API | 作用 | 鉴权 |
-|---|---|---|
-| `GET /api/status` | `{ok, needsSetup, needsAuth, port}`，前端据此决定是否显示 🔒（本项目无独立登录页，登录走页面内弹窗） | 开放 |
-| `POST /api/login` | 校验密码、签发 HttpOnly cookie（`remember` 签长会话） | 开放 |
-| `POST /api/logout` | 注销、清 cookie | 开放 |
-| `POST /api/change-password` | 改密（已设密码须验旧密码） | **需登录** |
-
-> **注意**：端点名从旧的 `/api/auth/status|login|logout` 改为框架的
-> `/api/status|login|logout`（其它项目一致）。前端已同步。
-
-**自动更新类**（框架通用件 `framework/route/routes-auto-update.js`）：
-
-| API | 作用 | 鉴权 |
-|---|---|---|
-| `GET /api/auto-update/status` | 配置 + 运行状态（含 `lastUpdatedAt`） | 开放 |
-| `POST /api/auto-update/config` | 改启停/模式/间隔 | 开放 |
-| `POST /api/auto-update/check` | 手动触发一次 GitHub 检查 | 开放 |
-| `POST /api/auto-update/restart` | 手动重启 | 开放 |
-
-### 前端关键点（app.js）
-- **同源 API**：零依赖后静态页与 API 同端口，`API_ROOT=''`，`credentials:'same-origin'`（原跨端口动态 host 方案已废弃，见坑①）。
-- **目录树**：`buildDirTreeFor()` + `renderDirTree()` 递归渲染，深层高亮需祖先链展开（见坑⑦）。
-- **折叠+分组（foldChain）**：`currentScope()` 收集子目录 → **统一规则：有子文件夹就分组（不管1个多个、不管有无直图），无子文件夹就拍平图片**；分组递归（分组里的分组也是分组），嵌套分组独占一行、字体逐层缩小区分层级；分组默认折叠，展开状态存 `localStorage('galleryExpandedGroups')`。
-  - 分组交互：**名称部分点击=进入该目录**，**后面▲/▼符号=折叠/展开**（名称部分进入文件夹，符号部分折叠/展开）。
-  - 分组自身如有直图，直图作为分组内首个叶子项（不丢失）。
-- **按目录导航（navByDir）**：每个根目录各自记录 `currentPath`（`navByDir: Map<rootPath, currentPath>`），切换分类时恢复该目录上次路径；localStorage 按浏览器天然隔离（不同设备各自独立路径）。
-- **侧边栏折叠/展开**：已展开（ancestor）的节点点击=折叠不导航；未展开的节点点击=展开+导航；折叠状态存 `localStorage('galleryCollapsedTreeNodes')`。
-- **路径后退/前进**：面包屑前后有 `< >` 按钮，`navHistory` 栈记录每次导航状态，后退/前进移动指针恢复 `{activeDir, currentPath, activeFilter}`；初始状态入栈，导航后 `pushNavHistory()` 截断前进栈。
-- **Lightbox 滑动切换**：触摸水平滑动（`touchstart/touchmove/touchend`，dx>40 切换）、鼠标滚轮（`wheel`，防默认滚动）、键盘左右键、Prev/Next 按钮——四种切换方式。
-- **Lightbox 下载**：`fetch` blob → `URL.createObjectURL` → `a.download`；回退 `window.open`。
-- **卡片行预览滑动**：**没点开时**在图片行上按住横向拖动 → 行滚动（`gridDrag` mousedown/mousemove/mouseup，位移>4px 判定为拖动并 `preventDefault`；捕获阶段拦截 click 防误开卡片）（需求为「未点开时即可横向拖动」，而非仅在灯箱内滑动）。
-- **收藏功能**：预设"🩷 收藏"分类（不可删改）；`favorites.json` 持久化；`GET /api/favorites`（开放，游客可看）；`POST/DELETE /api/favorites`（需登录）；lightbox 🩷 按钮切换收藏，已收藏卡片显示 ❤️ 角标；收藏视图平铺所有收藏图片；**收藏 src 规范化 `normalizeFavSrc()`**：旧数据若存完整 URL（含端口）→ 转成相对 `/api/media?file=...`（修复重启后收藏图片裂开，见坑⑱）。
-- **收藏 Lightbox 来源路径**：在收藏分类打开图片时，下方描述额外显示 `📁 来源绝对路径`（存 `path` 字段；老收藏用 `root` 兜底）（在收藏分类打开图片时额外显示来源路径）。
-- **上传权限**（收藏目录不可上传；未登录只能上传到预设「游客」分类，文件存项目本地）：`handleFiles()` 判定——①`activeFilter==="favorites"` 时禁止上传（提示"收藏分类不可上传"）；②未登录（游客）→ 只能上传到预设「👤 游客」分类，文件存项目本地 `uploads/`（`/api/upload` 无 targetDir）；③登录后 → 若当前在真实目录 `activeDir`，带 `targetDir` 上传直接写入该目录（`/api/upload?targetDir=`，服务端校验登录+目录存在），否则存本地。游客分类图片 = 服务端 `/api/uploaded`（持久）+ 本次浏览期内前端上传（按 src 去重）。
-- **顶部分类可滑动导航**：`.nav-scroll` 包裹（`flex:1; min-width:0; overflow-x:auto`）内分类按钮横向滑动；搜索框窄一半（`width:100px`，聚焦 130px）（顶部分类过多时横向滑动；搜索框相应收窄）。
-- **压缩包折叠**：`galleryCollapsedZips` 持久化收起/展开。
-- **GIF 合成**：规则集中在 `server/lib/rule/gif-rule.js`（唯一实现，前后端共用同一份源）——**目录一律平铺**，只有压缩包按两条具名规则合成：mod（含 `.ini` 且有 `$speed`，翻转）或图包（包名带间隔）。缓存 `cache-gifs/`。
-- **压缩包按 mod 语义分流（4 条规则）**：①包名带间隔（`@40ms`/`2s`，Pixiv 图包）→ 按该间隔合成 GIF、**不翻转**；②含 `.ini`（3DMigoto mod）→ 包内图片是**倒置存储**，输出前 180° 翻转（`ffmpeg -vf vflip,hflip`；群晖静态 ffmpeg 缺 png/jpg muxer，故翻转结果用单帧 GIF 承载）；③两者都无 → 不合成、原样显示；④含 ini 且是序列且 ini 有 `$speed` → 按 `1000/(fps×$speed)` 换算帧间隔合成（`fps` 为游戏渲染帧率，走 API 参数、默认 60）。`$speed` 是 3dmigoto 动画 ini 的每帧递进量（`[Present]` 里 `$frame = $frame + $speed`）。
-- **长按/右键**：~~`contextmenu` 仅 img preventDefault；无 pointerdown 监听，不影响滑动与单击~~ **已放开**（2026-09-01 注释掉 contextmenu 屏蔽与 img 的 user-select/touch-callout/user-drag，允许长按/右键保存图片）。
-- **登录 UI**：`refreshAuth()` 读 **`/api/status`**（框架端点，返回 `needsAuth`）→ 未登录只显 🔒 无 ⚙，登录后只显 ⚙ 无 🔒（退出登录入口移到设置面板内 `#settingsLogout`）。
-- **设置面板**：右侧固定浮层（`position:fixed; right:-420px→0`），折叠展开不挤压图片区域。
-- **i18n**：`LANGS=['zh-CN','en']`、`localStorage('galleryLang')`、`t(key,vars)`、`data-i18n` 静态填充。
-- **性能优化**：① 服务端 scan cache（`IMAGE_SCAN_CACHE`，30s mtime 探测，首次 9.7s→缓存 0.19s）；② `dirAgg` 预计算（每张图向所有祖先目录贡献，`statDir` O(N)→O(1)，render 6.2s→176ms）；③ `<img loading="lazy" decoding="async">` 延迟加载。
-
-## 五、开始的坑（踩坑全记录，重点）
-
-### 坑①（已解决）localhost 局域网访问没数据 ⚠️（零依赖后同源，已不复现）
-- **历史现象**：旧版 `api.js` 硬编码 `const API_BASE = 'http://localhost:3000/api'`。本机访问正常，但**局域网其他设备访问 `http://10.10.10.4:8080/` 时，页面里所有 API 请求都发到「访问者自己电脑的 localhost:3000」→ 连不上 → 画廊空白/没数据/报错**。
-- **历史修复**：前端 API 地址用 `window.location.hostname` 动态拼。
-- **2026-09 零依赖重构后**：静态页与 API **同一进程同一端口 8081**，前端 `API_ROOT=''`、`API_BASE='/api'`（相对路径），无论从哪个地址访问都自动同源，彻底消灭跨端口问题。
-- **防再犯**：写 Web 前端，凡是跨设备访问的服务，API 地址用相对路径/`window.location` 动态拼，**绝不硬编码 localhost/127.0.0.1/端口**。收工前用局域网真实 IP 验证一遍。
-
-### 坑② API 前缀 `/api` 必须完整
-- 曾把资源 URL 用不含 `/api` 的 `API_ROOT` 拼（如 `API_ROOT + '/media?...'`），导致 404。
-- 规则：接口全走 `API_BASE + '/api/...'`；`apiUrl()` 只用于拼媒体直链时也要注意——GIF/zip 图片一律走带 `/api` 的 `/api/gif`、`/api/zip/gif`、`/api/zip/img`。
-
-### 坑③ 压缩包显示需求三连坑
-1. 平铺成散图（错）
-2. 独立显示「压缩包」分组/标题（错）
-3. **压缩包内图直接显示在文件夹分组、不显示压缩包标题**（对）
-- 「不要显示压缩包」= 不显示压缩包本身，但要显示内图；"解析到压缩包那一层" = 压缩包内图要解析出来。zip 组**无标题**，异步加载内图并入同名 mod 文件夹分组（散图+压缩包同框）。
-- **压缩包条目要么是图片（内联显示），要么不显示**（用户不想看到 .ini 等解析文本）；无图片的压缩包整组隐藏。
-- **压缩包条目绝不能当普通图片走 `/img`**：imgList 跳过 isZip、聚合跳过 zip、server 端 `/img` 对 zip 403（三层修复，防 img.bin 重复显示）。
-
-### 坑④ zip 条目名 GBK 解码
-- 中文 zip 条目名多为 GBK，`buf.toString('utf8')` 硬解出乱码。
-- 修复：`TextDecoder('utf-8', {fatal:true})` 严格解码失败回退 `TextDecoder('gbk')`。
-
-### 坑⑤ 7z l 列序 bug
-- 7z l 表格列序：`Date Time Attr Size Compressed Name`，正则分组 `m[1]=Attr, m[2]=Size, m[3]=Name`。
-- 曾写成 `name: m[2], size: parseInt(m[1])`（Size 当名字、Attr 当大小）→ rar images 全空、others 把数字当文件名。正确：`name: m[3].trim(), size: parseInt(m[2],10)`，图片判断用 `m[3]`。
-
-### 坑⑥ RAR m3:25 需新版 7-Zip
-- 旧 `7z 16.02`（/usr/bin/7z）解不了 RAR `m3:25`（报 Unsupported Method），遇「scan 有图取图空」先查条目 Method。
-- 本项目 `tools/7zz` = 官方新版 7-Zip 26.02；SEVEN_ZIP 指向它。
-- 7z 16.02 对 GBK 文件名输出 `?`（字节在 7z 层丢失，rar/7z 分支无法恢复原中文名；zip 分支自解析不受影响）。
-
-### 坑⑦ 侧边栏深层高亮不渲染 + 子目录项缺 data-root + 只能展开不能折叠
-- 曾仅当 `active`（路径精确等于 activePath）才递归展开 → `Mods/.Mods/(gamebanana)/女武神` 这种深层永远不渲染。
-- 修复①（isAncestor）：`isAncestor = !!activePath && (activePath === child.relPath || activePath.startsWith(child.relPath + '/'))`，祖先链也要递归展开。
-- 修复②（data-root）：`renderTreeChildren` 生成的子目录项只有 `data-path` 没有 `data-root` → 点击后 `item.dataset.root=undefined` → `activeDir=undefined` → 侧边栏全收起。修复：给所有子目录项也加 `data-root=rootPath`。
-- 修复③（折叠/展开）：规则为「已展开点击=折叠不导航，未展开点击=展开+导航」。加 `collapsedTreeNodes` Set（`localStorage('galleryCollapsedTreeNodes')`），展开条件 = `(active || isAncestor) && !collapsedTreeNodes.has(nodeKey)`；点击已展开节点→折叠（加入 set），点击未展开→导航进入（自动展开）。
-
-### 坑⑧ 新增分类后下拉不刷新
-- `addCategoryBtn` handler 没调 `renderDirectories()` → 设置页 Directories 下拉看不到新分类。
-- 规则：改名/改色/新增/删除分类后**必须** `renderDirectories()`；删除分类 → 引用该分类的目录回退 `"all"`（下拉含 all 选项）。
-
-### 坑⑨ 跨端口 Cookie 不携带（登录后仍显示游客）⚠️（零依赖后已解决）
-- **历史**：旧版页面 :8080、API :3000 是**跨源**，前端用 `credentials:'include'` 不够，服务端还得开 CORS 凭证；缺一步 → 带 cookie 请求被拦截 → `/api/auth/status` 永远 `authed:false` → 登录「成功」刷新后又变游客（真实教训）。
-- **2026-09 零依赖重构后**：静态页与 API **同一端口**，天然同源，无需 CORS；前端 `credentials:'same-origin'` 即可。此坑彻底消灭。
-
-### 坑⑩ 横向滚动下卡片宽度塌缩成 0
-- `.dir-grid` 改 flex 横向后，`.card img` 若仍 `position:absolute` → 图片不参与布局 → 卡片宽度 0、图片 0 宽。
-- 修复：横向行内图片改流式撑宽（`position:static; height:100%; width:auto`），卡片 `height: var(--card-h); width:auto`。图片高度加大用 `--card-h`（桌面 `clamp(260px,min(56vh,30vw),640px)`，竖屏更高）。
-
-### 坑⑪ 改代码必须升版本号
-- 前端无构建流程，index.html 用 `?v=18/19` 引 JS/CSS。改了 app.js/api-client.js/style.css/index.html 必须升版本号，否则用户浏览器用缓存旧文件。
-- 验证"新代码真的生效"：curl 服务端返回的文件内容含新标记，别只看磁盘文件。
-
-### 坑⑫ CDP headless 中 `prompt()` 永久阻塞
-- CDP headless 里 `prompt()` 永不返回（无对话框）。测试脚本先 `window.prompt = () => '测试值'` 再点按钮。
-- **2026-09 分类/目录添加已改内联 UI**（分类=内联输入框 + 目录=📂 目录浏览器），不再用 `prompt()`，此坑不再触发。
-
-### 坑⑬ 手机布局不要改
-- 窄屏适配已明确否决：手机窄屏下 sidebar 240px、.main 窄，**保持现状**，不做响应式折行改动。图片横向滑动只影响文件夹图片行。
-
-### 坑⑭ 登录语义 + 上传权限
-- 「不登录也能访问，不强制登录，默认游客，登录了才能显示和修改设置」：
-  - 浏览全部 GET 开放；
-  - 设置了密码后，未登录只显 🔒 无 ⚙；登录成功只显 ⚙ 无 🔒，退出登录入口在设置面板内；
-  - 游客点设置弹登录框，登录成功自动打开设置；
-  - **未设密码时全部开放**，`--set-password` 设密码后启用登录限制。
-- **上传权限**（收藏目录不可上传；其他目录登录后可上传；未登录只能上传到预设「游客」分类，文件存项目本地）：
-  - 收藏分类禁止上传（前端拦截提示）；
-  - 未登录（游客）只能上传到预设「游客」分类，文件存项目本地 `uploads/`；
-  - 登录后上传到其他真实目录（`/api/upload?targetDir=`，服务端校验登录 + 目录存在）。
-
-### 坑⑮ config.json 实时读
-- 每次请求 `loadConfig()` 实时读文件，改 config.json 无需重启 API。
-- `GET /api/gallery` 返回前 `publicConfig()` **剥离 passwordHash/passwordSalt**（绝不能让前端拿到哈希）。
-
-### 坑⑯ GIF 合成判断（2026-10-14 口径修正）
-- 合成规则集中在唯一实现 `server/lib/rule/gif-rule.js`（前端由 `js/manifest.json` 内联进 app.js，后端由 `assemble.json` 映射后 require，同一份源），共**两条具名规则**：
-  - **规则一 · mod 合成**：序列帧 + 含 `.ini`（3DMigoto mod）+ ini 有 `$speed>0` → 合成；输出前 180° 翻转（`flip=true`）。
-  - **规则二 · 图包合成**：序列帧 + 包名带帧间隔（`@40ms`/`500ms`/`2s`，Pixiv 图包）→ 按该间隔合成；不翻转。
-  - 两条都不命中 → 不合成、原样显示。
-- **目录（文件夹）内图片一律平铺原图，不再合成**：卡面/图集这类数字编号图（如 `tex_support_card_10001.png…`）与动画帧在命名上无法区分，只能按来源判定；此前的「编号连续 ≥3 张就整目录合成」会把它误合成一个 GIF。
-
-### 坑⑱ 权限模型：自由浏览 + 黑名单（2026-10-14 重做）
-- **默认语义**：任意绝对路径都能浏览；只有命中**黑名单**（系统关键目录）的路径才被拒（403）。
-  黑名单来自 `.env` 的 `GALLERY_BLACKLIST_DIRS`（`.env` 优先）或 `config.blacklistDirs`，都没有则用内置兜底集
-  （`/proc /sys /dev /run /boot /etc /bin /sbin /lib* /usr /var /tmp` + 群晖元数据 `/volume1/@appstore` 等）。
-- **比对方式**：请求路径与黑名单项**都做 realpath** 后按前缀判定 ⇒ 软链指向黑名单同样被拦；
-  两个入口（`/api/directories`、`/api/images`）都在**读盘之前**直接 403。
-- **白名单兼容**：显式配置 `GALLERY_FS_ROOT(S)` / `config.fsRoot(s)` 时退回旧语义（必须落在允许根之内）；
-  默认根也从「已配置目录的公共前缀」改为「已配置目录各自」（跨卷时公共前缀会退化为 `/`，等于放开全盘）。
-- `config.directories` 语义变化：由「权限边界」降为「**快捷入口 + 分类标签**」，浏览不再受它限制。
-
-### 坑⑲ 每行图片数量（可配，默认 20）
-- `GALLERY_IMAGES_PER_ROW`（`.env`）→ `/api/gallery` 的 `imagesPerRow` → 前端 `window.__GALLERY_IMAGES_PER_ROW`
-  （前端不硬编码，取不到兜底 20）。
-- 实现：`render()` 末尾调用 `applyImageRowWrap(n)` 做**一次后处理** —— 把每个图片行 `.dir-grid` 的子卡片按 n 张切块、
-  包进 `.dir-rows`（竖向多行），行数 = `ceil(张数 / n)`。一次覆盖全部图片行（叶子文件夹/分组/当前文件夹/压缩包分组），
-  **不改卡片尺寸语义**（卡片样式与尺寸不变，只是分行）。不足一行的容器保持单行横滚。
-- `.env` 改动需重启服务（`.env` 每进程只读一次）。
-
-### 坑⑰ 统一分组规则（3种展示→1种）
-- **旧逻辑**：①有直图就拍平 ②无直图+1子目录→合并前缀 ③无直图+多子目录→分组 → 同结构目录出现3种不同展示。
-- **新逻辑**（有子文件夹就分组，哪怕该目录同时含直图也不影响分组）：**有子文件夹→分组（不管1个多个、不管有无直图）；无子文件夹→拍平图片**。分组自身有直图时，直图作为分组内首个叶子项（不丢失）。
-- **自动下钻**：`render()` 开头循环——当前层无直图且仅一个子目录（group/hasSub）时自动推进 `currentPath` 并 `saveNav()`（防死循环：guard 40 次 + `currentPath === only.relPath` 即停）。
-
-### 坑⑱ 收藏图片重启后裂开（favorites.json 存了带端口的完整 URL）⚠️
-- **现象**：收藏的图片重启/换端口后不显示（裂开）。`favorites.json` 里 `src` 存的是**完整 URL**（如 `http://fnos.local:3000/api/media?file=...`），零依赖重构后旧端口 `:3000` 已不存在 → 图片 404。
-- **根因**：收藏时把 `p.src` 原样存盘，旧版 `p.src` 是动态 host + `:3000` 拼出来的完整 URL；端口一变就失效。
-- **修复**（app.js `normalizeFavSrc()`）：加载收藏时把完整 URL 转成相对路径（`new URL(src)` 只保留 `pathname+search` → `/api/media?file=...`）；新增收藏时也先 normalize 再存。
-- **防再犯**：**任何要持久化的资源地址一律存相对路径，绝不存带主机/端口的完整 URL**；换端口/换机不失效。
-
-## 六、开发自检清单（改代码后必做）
+| 端点 | 方法 | 说明 |
+| --- | --- | --- |
+| `/api/status` | GET | 服务状态与登录态 |
+| `/api/gallery` | GET/POST | 读取或保存站点配置 |
+| `/api/directories` | GET | 列出已配置的根目录 |
+| `/api/dir` | GET | 列单层目录与图片 |
+| `/api/images` | GET | 列图片；`root`、`path`、`recursive`、`limit`、`offset` 均可空 |
+| `/api/media` | GET | 输出单个图片文件 |
+| `/api/zip/scan` | GET | 列目录下的压缩包 |
+| `/api/zip/img` | GET | 输出压缩包内单张图片；`path`、`file` 必填 |
+| `/api/zip/gif` | GET | 压缩包内序列帧合成 GIF；`path` 必填，`dur_ms`、`fps` 可空 |
+| `/api/gif` | GET | 目录内序列帧合成 GIF；`dir` 必填，`dur_ms` 可空 |
+| `/api/favorites` | GET/POST/DELETE | 收藏的读取、新增、删除 |
+| `/api/upload` | POST | 上传图片；`targetDir` 可空（空则落到默认上传目录） |
+| `/api/index-cache` | GET | 目录索引缓存统计（命中率、驻留字节） |
+| `/api/auto-update/status` | GET | 自动更新状态 |
+| `/api/auto-update/check` | POST | 立即检查更新 |
+| `/api/auto-update/config` | POST | 保存自动更新配置 |
+| `/api/auto-update/restart` | POST | 重启服务 |
+| `/api/login`、`/api/logout` | POST | 登录、登出 |
+| `/api/change-password` | POST | 设置或修改访问密码 |
 
 ```bash
-# 1. 语法检查（全部后端模块）
-for f in server/app.js server/lib/*.js server/routes/*.js; do node --check "$f" || echo "FAIL $f"; done
+# 列某个根目录下的全部图片（不传 limit = 全量）
+curl 'http://<NAS-IP>:<端口>/api/images?root=/path/to/gallery&recursive=true'
 
-# 2. 启停 + 健康检查（脚本自带 8s 健康检查）
-./start.sh restart
-./start.sh status
-
-# 3. 端点回归
-for ep in /api/status /api/directories /api/images /api/gallery /api/favorites /api/uploaded /api/auto-update/status; do
-  printf '%-28s %s\n' "$ep" "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:8081$ep")"
-done
-
-# 4. 用局域网真实 IP 访问，不要用 localhost 自欺
-curl -s -o /dev/null -w '%{http_code}\n' http://10.10.10.193:8081/
+# 只取前 200 条（响应里的 count 仍是总数，returned 是本页数量）
+curl 'http://<NAS-IP>:<端口>/api/images?root=/path/to/gallery&recursive=true&limit=200&offset=0'
 ```
 
-- 改前端后**必须升 `index.html` 里的 `?v=` 版本号**（当前 43），否则浏览器用缓存旧 JS/CSS。
-- 登录回归：未登录写操作须 401，登录后须 200（cookie 名 `session`）。
-- 测试脚本若误改 `config.json`（如目录 category 被改成 `"all"`），记得恢复。
+## 文档索引
 
-## 七、部署环境事实（迁移后核对）
-
-- 当前部署目录：`<工作区>/gallery/`（工作区即 NAS 上的开发目录）。
-- Node：`/var/packages/DeepSeekHarness-NAS/target/bin/node`（v22.23.2）。
-- 同源项目（同一套框架与启停脚本）：`gamebanana-mods-downloader/`（8642）、`iwara-downloader/`（有自己的 `tool/node`）。
-- 模板仓库：`dl-server-template/`（本项目的前端/后端框架素材与 `start.sh` 都来自它）。
-- git：本项目已 init。已 gitignore：`sessions.json`/`favorites.json`/`config.json`/`cache-gifs/`/`uploads/`/`tools/`/`*.log`/lock 文件。
-  `server/core/` 等 8 个框架子目录、`server/boot.cjs`、`server/lib/cjs-bootstrap.cjs` 是**模板下发件**，已入库
-  （部署端以 github 模式远程 `auto-update` 拉取本仓库，不入库就拿不到新版）。
-
-## 八、遗留
-
-- 上传图片走 `POST /api/upload`（手写 multipart 解析，零依赖）→ 无 targetDir 存本地 `uploads/`，有 targetDir（登录）写真实目录；上传权限见坑⑭。
-- 压缩包索引/解析表由本画廊自足（不再依赖 downloader fileIndex.json —— 旧画廊的做法已废弃，本项目直接扫目录 + zip 内图）。
-- **待办：拆分 `server/public/app.js`（2097 行单体前端）**。现状：`render()` 圈复杂度 121、`currentScope()` 73（审计阈值 10），均远超阈值——两个函数把「目录树/分组/压缩包/GIF/灯箱/设置」全塞在一起，几乎不可测、改一处容易碰坏别处（本次压缩包分流改动就落在 `render()` 内）。审计门禁因此对该文件报 `maintainability/max-cyclomatic-complexity` blocker；本次改动先用 `audit:false` 提交（用户决定），**拆分后应恢复门禁**。拆分建议：按「目录树 / 图片网格 / 压缩包分组 / 灯箱 / 设置」切成 `public/js/*.js` 由 `index.html` 按序引入，`render()` 只做调度。
-
-## 九、版本记录
-
-> 版本记录已**外置**到 **[docs/CHANGELOG.md](docs/CHANGELOG.md)** —— 由 dsh-git-push 插件的 `doc-version`
-> 从 git log 聚合（`apply` 更新 / `check` 查漂移，可接 CI），启用该工具前的历史记录一并保留在该文件里。
+| 文档 | 内容 |
+| --- | --- |
+| [架构与数据流](https://github.com/EIGHTfs/gallery/blob/main/docs/架构与数据流.md) | 进程角色、请求链路、数据落点 |
+| [目录与索引机制](https://github.com/EIGHTfs/gallery/blob/main/docs/目录与索引机制.md) | 索引何时建、如何失效、分页字段 |
+| [索引缓存与命中率](https://github.com/EIGHTfs/gallery/blob/main/docs/索引缓存与命中率.md) | 缓存上限与开关、命中率怎么查 |
+| [图片扫描与IO归因](https://github.com/EIGHTfs/gallery/blob/main/docs/图片扫描与IO归因.md) | 哪些请求读盘、分批执行、耗时归因 |
+| [图片缓存与HTTP缓存头](https://github.com/EIGHTfs/gallery/blob/main/docs/图片缓存与HTTP缓存头.md) | 缓存头怎么发、怎么验证生效 |
+| [压缩包与GIF规则](https://github.com/EIGHTfs/gallery/blob/main/docs/压缩包与GIF规则.md) | 直出、翻转判定、序列帧合成判定 |
+| [根目录与排除规则](https://github.com/EIGHTfs/gallery/blob/main/docs/根目录与排除规则.md) | 黑名单模式、排除目录、扫描范围 |
+| [部署与运维](https://github.com/EIGHTfs/gallery/blob/main/docs/部署与运维.md) | 首次部署、日常操作、迁移核对、已知限制 |
+| [开发与排障](https://github.com/EIGHTfs/gallery/blob/main/docs/开发与排障.md) | 改代码自检步骤、常见现象处理 |
+| [代码组织与文件归属](https://github.com/EIGHTfs/gallery/blob/main/docs/代码组织与文件归属.md) | 各目录职责、通用件与业务代码 |
+| [版本记录](https://github.com/EIGHTfs/gallery/blob/main/docs/CHANGELOG.md) | 各版本改动 |

@@ -135,6 +135,30 @@ test("文件不存在时不抛错、不登记条目", () => {
   assert.strictEqual(cache.stats().entries, 0, "不存在的文件不应被缓存");
 });
 
+test("环境变量在模块加载之后设置也生效（.env 懒加载场景）", () => {
+  // 项目根的 .env 由配置模块懒加载注入 process.env，可能晚于本模块加载。
+  // 若本模块在加载时就把值读成快照，.env 里配了也会表现成"没生效"。
+  cache.reset();
+  delete process.env.GALLERY_INDEX_CACHE;
+  delete process.env.GALLERY_INDEX_CACHE_MB;
+
+  assert.strictEqual(cache.isEnabled(), true, "未设置时默认开启");
+  assert.strictEqual(cache.stats().limitBytes, 128 * 1024 * 1024, "未设置时默认 128MB");
+
+  process.env.GALLERY_INDEX_CACHE = "0";
+  assert.strictEqual(cache.isEnabled(), false, "后置设置的关闭开关必须生效");
+
+  delete process.env.GALLERY_INDEX_CACHE;
+  process.env.GALLERY_INDEX_CACHE_MB = "32";
+  assert.strictEqual(cache.stats().limitBytes, 32 * 1024 * 1024, "后置设置的上限必须生效");
+
+  cache.setLimitBytes(64 * 1024 * 1024);
+  assert.strictEqual(cache.stats().limitBytes, 64 * 1024 * 1024, "显式设置优先于环境变量");
+
+  delete process.env.GALLERY_INDEX_CACHE_MB;
+  cache.reset();
+});
+
 test("loader 抛错时不污染缓存（下次仍会回源）", () => {
   cache.reset();
   cache.setEnabled(true);

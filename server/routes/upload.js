@@ -32,7 +32,8 @@ function requireAuth(req, res, ctx) {
   return false;
 }
 
-const UPLOAD = path.join(__dirname, "..", "..", "uploads");
+// 数据根可由 GALLERY_DATA_DIR / DATA_DIR 指定；默认仍是项目根（仓库态行为不变）
+const UPLOAD = path.join(require("../lib/paths").dataRoot(), "uploads");
 
 if (!fs.existsSync(UPLOAD)) fs.mkdirSync(UPLOAD, { recursive: true });
 

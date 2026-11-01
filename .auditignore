@@ -1,0 +1,21 @@
+# .auditignore — 审计豁免（语法同 .gitignore）
+# 照常 git 跟踪/提交，仅审计扫描跳过；与 .gitignore 叠加生效（各管各的）。
+#
+# 豁免原则：只豁免「规则误报 / 非产品代码」——规则套错对象，或与质量无关。
+# 产品代码（server/routes、server/lib、server/public 的前端源码）一律照常审计。
+# 唯一例外是**拼接产物**（生成物，见下）：它的真源分片在模板仓库侧照常审计。
+
+# ---------------------------------------------------------------------------
+# 拼接产物：server/public/app.js 是 scripts/join-js-parts.mjs 的拼接结果
+# （真源是模板仓库 templates/_gallery/js/ 下的 22 个分片），2000+ 行、单函数上千行、
+# 圈复杂度极高——readability/max-function-length、maintainability/max-cyclomatic-complexity
+# 必然命中，这是生成物的天然形态，不是本次改动引入，也无法在产物上逐条修。
+# 真源分片在 bench-template 侧照常审计（那边只豁免拼接产物本身）。
+server/public/app.js
+
+# ---------------------------------------------------------------------------
+# 配置样例：.env 与 .env.example 只有运行参数（图片根目录、黑名单目录、每行图数、品牌名），
+# 不含任何凭据；被 credfile-common 按「.env 文件名」命中属规则误报。
+# 真实凭据（密码哈希、token）在 server/config.json 与部署环境变量里，二者都不入库。
+.env
+.env.example
