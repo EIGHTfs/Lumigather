@@ -251,7 +251,11 @@ function createServer(opts) {
   const cfgPort = typeof config.get === "function"
     ? config.get("port")
     : (typeof config.readConfig === "function" ? (config.readConfig() || {}).port : null);
-  const port = portOpt || cfgPort || process.env.PORT || DEFAULT_PORT;
+  // 端口优先级：环境变量 PORT（bin/start.sh 注入）> 调用方传参 > 配置文件/默认值。
+  //   原先把 cfgPort 放在 PORT 之前：配置文件里有默认 port 时，--port 与 PORT 永远被覆盖
+  //   （实测 npx --port 8682 仍监听配置里的 8642）。命令行显式端口必须能盖过配置文件默认值。
+  const envPort = Number(process.env.PORT || 0);
+  const port = (Number.isInteger(envPort) && envPort > 0) ? envPort : (portOpt || cfgPort || DEFAULT_PORT);
 
   server.listen(port, () => {
       // 不传 host 时 Node 监听 ::/0.0.0.0（局域网可访问）。

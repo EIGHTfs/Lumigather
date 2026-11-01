@@ -321,10 +321,15 @@ start_server() {
   rm -f "$PID_FILE"
   # 代码目录 + 数据目录都要在：日志写 <数据根>/logs、配置写 <数据根>/server
   mkdir -p "$SERVER_DIR" "$DATA_ROOT/logs" "$DATA_ROOT/server"
+  # 让服务端与脚本用同一个数据根（否则脚本把 PID/日志写到 A、服务端把缓存写到 B）。
+  #   DATA_DIR 指向 **server 目录**：框架的 store/json-dir.js 以它为 server 根，
+  #   配置因此落 <数据根>/server/config.json、运行期 json 落 <数据根>/json。
+  #   若某个项目的数据根变量语义不同（如以「数据根」为语义的 <APP>_DATA_DIR），
+  #   装配到该项目时把这一行换成 export <APP>_DATA_DIR="$DATA_ROOT"，不要两行并存。
+  export DATA_DIR="$DATA_ROOT/server"
   rotate_log
   cd "$SERVER_DIR" || exit 1
   # 让服务端与脚本用同一个数据根（否则脚本把 PID/日志写到 A、服务端把缓存写到 B）
-  export LUMIGATHER_DATA_DIR="$DATA_ROOT"
   local cmd=("$NODE_BIN" boot.cjs)
   if [ -n "$port_opt" ]; then
     export PORT="$port_opt"
