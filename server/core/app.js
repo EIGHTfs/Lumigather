@@ -264,6 +264,19 @@ function createServer(opts) {
     if (onReady) onReady(port);
   });
 
+  // 启动失败的「人话」：不把原始 EADDRINUSE 堆栈丢给用户。
+  //   为什么：端口占用是首次运行最常见的失败（8080/8081/8642 都常被占），
+  //   堆栈只说「address already in use」，不说下一步该做什么。
+  //   退出码 2 专指「启动期失败」，与业务异常的 1 区分，脚本/监控可据此判定。
+  server.on("error", (e) => {
+    if (e && e.code === "EADDRINUSE") {
+      console.error("端口 " + port + " 已被占用：用 --port <其他端口> 换一个，或先停掉占用该端口的进程");
+      process.exit(2);
+    }
+    console.error("服务启动失败：" + (e && e.message ? e.message : String(e)));
+    process.exit(2);
+  });
+
   return server;
 }
 

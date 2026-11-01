@@ -8,6 +8,18 @@
 // ============================================================
 "use strict";
 
+// 进程启动时刻：本模块在装配阶段被 require（监听之前），取到的即进程启动时间
+const STARTED_AT = Date.now();
+
+/** 项目版本号：package.json 缺失（极简部署）时返回空串，不让状态查询因缺文件而 500 */
+function appVersion() {
+  try {
+    return String(require("../../package.json").version || "");
+  } catch (_) {
+    return "";
+  }
+}
+
 module.exports = function register(api) {
   const { route, routePublic, sendJson, readBody, cfg, auth, setSessionCookie } = api;
 
@@ -49,8 +61,11 @@ module.exports = function register(api) {
     return sendJson(res, { ok: true }, 200);
   });
 
-  // GET /api/status —— 前端据此决定跳登录页还是进主界面
+  // GET /api/status —— 前端据此决定跳登录页还是进主界面；启停脚本/监控也用它判活
   // 字段契约：ok / needsSetup（未设密码）/ needsAuth（密码已设置）/ authed（当前会话已登录）/ port
+  //   + uptimeSec（进程已运行秒数）/ version（项目 package.json 的版本号，读不到时为空串）
+  //   为什么放在 /api/status 而不另开健康端点：启停脚本与监控已经在看这个端点，
+  //   追加字段零成本；另开端点只会多一个要被各下游实现的契约。
   // authed 必须由服务端按 session 判定——needsAuth 只是「密码已设置」，
   // 前端拿 needsAuth 当登录态会在设密码后恒判未登录（gallery 收藏「请先登录」事故根因）。
   routePublic("*", "/api/status", (req, res) => {
@@ -60,7 +75,9 @@ module.exports = function register(api) {
       needsSetup: !c.passwordHash,
       needsAuth: !!c.passwordHash,
       authed: auth.isValidSession(auth.extractToken(req)),
-      port: c.port || 8643
+      port: c.port || 8643,
+      uptimeSec: Math.max(0, Math.floor((Date.now() - STARTED_AT) / 1000)),
+      version: appVersion()
     }, 200);
   });
 
