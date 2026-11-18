@@ -1,0 +1,38 @@
+// 构建环境适配：把 Maven Central / Gradle 插件门户改写到腾讯镜像。
+// 为什么需要：本机直连上游仓库时，Gradle 解析依赖会因连接被拒/超时长时间卡住（实测过），
+// 而腾讯镜像对同一构件是 10MB/s 级；本脚本由 gradlew 以 -I 注入，等价于全局仓库替换，
+// 因此各模块不必在 build 脚本里重复写镜像地址。
+// 影响面：只改已知上游地址（plugins.gradle.org / repo.maven.apache.org / repo1.maven.org），
+// google() 与其它自建仓库保持不变。
+import org.gradle.util.GradleVersion
+
+def GRADLE_PLUGINS = "https://mirrors.tencent.com/nexus/repository/gradle-plugins/"
+def MAVEN_PUBLIC = "https://mirrors.tencent.com/nexus/repository/maven-public/"
+
+def rewrite = { repo ->
+    if (!(repo instanceof MavenArtifactRepository)) {
+        return
+    }
+    def url = repo.url.toString()
+    if (url.startsWith("https://plugins.gradle.org/m2")) {
+        repo.setUrl(GRADLE_PLUGINS)
+    } else if (url.startsWith("https://repo.maven.apache.org/maven2")
+            || url.startsWith("https://repo1.maven.org/maven2")) {
+        repo.setUrl(MAVEN_PUBLIC)
+    }
+}
+
+settingsEvaluated { settings ->
+    settings.pluginManagement.repositories.each { rewrite(it) }
+    // Added in Gradle 6.8. Gradle 5.4.1 used by the 1.3.10 publish job does not have it.
+    if (GradleVersion.current() >= GradleVersion.version("6.8")) {
+        settings.dependencyResolutionManagement.repositories.each { rewrite(it) }
+    }
+}
+
+gradle.beforeProject { project ->
+    // all() rewrites repositories already added by the root allprojects block,
+    // which runs before a subproject's beforeProject callback.
+    project.buildscript.repositories.all { rewrite(it) }
+    project.repositories.all { rewrite(it) }
+}

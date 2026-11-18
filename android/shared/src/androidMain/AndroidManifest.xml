@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 业务层的 manifest：本模块不声明组件，只用于让 AGP 生成库 manifest。
+     真正声明 Activity 的是 :app 模块。 -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" />

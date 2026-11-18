@@ -1,0 +1,4 @@
+<resources>
+    <!-- 应用名：桌面图标下显示的名字 -->
+    <string name="app_name">拾光集</string>
+</resources>
