@@ -126,7 +126,7 @@ const DEFAULT_BLACKLIST_DIRS = [
   "/proc", "/sys", "/dev", "/run", "/boot", "/etc", "/bin", "/sbin", "/lib", "/lib64",
   "/usr", "/var", "/tmp",
   // 群晖 NAS 元数据目录（系统/套件数据，不属于用户资源）
-  "/volume1/@appstore", "/volume1/@appdata", "/volume1/@database", "/volume1/@tmp", "/volume1/docker",
+  "/volume1/@appstore", "/volume1/@appdata", "/volume1/@database", "/volume1/@tmp", "/volume1/docker", // dsh-skip-sensitive
 ];
 
 /** 解析「目录数组」字符串（分隔符 : 或 ,）为绝对路径数组 */
@@ -261,10 +261,39 @@ function resolveTitle(cfg) {
 }
 
 // 浏览器不可见密码哈希
+// 公开接口绝不下发的字段名（凭据类）。新增配置项若含凭据，必须补到这里。
+// 为什么用键名集合而不是逐个 if：这类字段散落在嵌套对象里（如 autoUpdate.githubToken），
+//   写死单点剥离下次加配置又会漏 —— 用键名规则一次性覆盖。
+const SECRET_CONFIG_KEYS = new Set([
+  "githubtoken", "token", "accesstoken", "secret", "password", "passwordhash",
+  "passwordsalt", "credential", "credentials", "privatekey", "apikey",
+]);
+
+// 递归剥离凭据类字段（深度上限防止异常嵌套）。
+function stripSecretKeys(value, depth = 0) {
+  if (depth > 3 || value === null || typeof value !== "object") return value;
+  if (Array.isArray(value)) return value.map((item) => stripSecretKeys(item, depth + 1));
+  const cleaned = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (SECRET_CONFIG_KEYS.has(String(key).toLowerCase())) continue;
+    cleaned[key] = stripSecretKeys(item, depth + 1);
+  }
+  return cleaned;
+}
+
 function publicConfig(cfg) {
-  const { passwordHash, passwordSalt, ...rest } = cfg;
+  // 2026-11-19：原实现用 `...rest` 把整个 cfg 透传出去，只显式剥了 passwordHash/passwordSalt，
+  //   结果嵌套在 autoUpdate 里的 githubToken（明文 GitHub PAT）被匿名接口 /api/lumigather 原样下发 ——
+  //   等于任何能访问该端口的人都能拿到仓库写权限。改为统一按键名递归剥离。
+  const sanitized = stripSecretKeys(cfg);
+  const { passwordHash, passwordSalt, autoUpdate, ...rest } = sanitized;
+  const rawAutoUpdate = (cfg && cfg.autoUpdate) || {};
   return {
     ...rest,
+    // 前端需要知道「有没有配 token」才能显示状态，但只回布尔，绝不回值
+    autoUpdate: autoUpdate && typeof autoUpdate === "object"
+      ? { ...autoUpdate, hasGithubToken: !!rawAutoUpdate.githubToken }
+      : autoUpdate,
     title: resolveTitle(cfg),       // 旧默认值 "Gallery" 视为未设置（只在读取时折算，不落盘）
     fsRoot: resolveFsRoot(cfg),     // 向后兼容：单根（取第一个根）
     fsRoots: resolveFsRoots(cfg),   // 多根：全部允许的根（前端可用于目录树/限制提示）
