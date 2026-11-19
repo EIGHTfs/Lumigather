@@ -108,3 +108,31 @@ internal object RawFontSize {
     val title: TextUnit = 18.sp
     val display: TextUnit = 22.sp
 }
+
+/**
+ * 控件自身尺寸：与间距/圆角不同，它描述「这个控件多大」而不是「彼此隔多远」。
+ *
+ * 这些值曾经散在组件里（42.dp / 1.dp 之类），改一次要翻多个文件；
+ * 收进令牌层后，控件尺寸与配色一样只有一处来源。
+ * 依据：设计规范 1.5 节（可点区域、圆形按钮形态）+ 2.x 节各页面骨架里标注的尺寸。
+ */
+internal object RawSize {
+    /** 圆形图标按钮边长：略小于 44 触屏下限，靠外圈留白补足可点范围 */
+    // 触屏最小可点区 44dp（设计规范第 6 条硬要求），不是视觉审美值
+    val iconButton: Dp = 44.dp
+
+    /** 胶囊三档高度：34 紧凑（列表内）/ 40 常规 / 52 首屏主按钮 */
+    val pillCompact: Dp = 34.dp
+    val pillRegular: Dp = 40.dp
+    val pillLarge: Dp = 52.dp
+
+    /** 分隔与描边：1dp 是高分屏下不会消失的最薄一档 */
+    val hairline: Dp = 1.dp
+
+    /** 选中态圆点 */
+    val selectedDot: Dp = 6.dp
+
+    /** 投影：静止 2、浮起面板 6 */
+    val elevationResting: Dp = 2.dp
+    val elevationRaised: Dp = 6.dp
+}

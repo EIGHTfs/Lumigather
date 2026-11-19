@@ -26,6 +26,14 @@ import com.tencent.kuikly.compose.ui.unit.TextUnit
  * @property fontBody 正文基准
  * @property fontTitle 列表项标题、区块标题
  * @property fontDisplay 页面大标题
+ * @property sizeIconButton 圆形图标按钮边长
+ * @property heightPillCompact 胶囊按钮紧凑高度（列表内操作）
+ * @property heightPillRegular 胶囊按钮常规高度（页面内主操作）
+ * @property heightPillLarge 胶囊按钮大高度（首屏唯一主按钮）
+ * @property thicknessRule 分隔线与描边厚度
+ * @property sizeDot 选中态右侧圆点直径
+ * @property elevationResting 静止元素投影高度（卡片、圆形按钮）
+ * @property elevationRaised 浮起面板投影高度（底部浮层、侧栏）
  */
 data class Metrics(
     val spacingXs: Dp = RawSpacing.xs,
@@ -43,6 +51,14 @@ data class Metrics(
     val fontBody: TextUnit = RawFontSize.body,
     val fontTitle: TextUnit = RawFontSize.title,
     val fontDisplay: TextUnit = RawFontSize.display,
+    val sizeIconButton: Dp = RawSize.iconButton,
+    val heightPillCompact: Dp = RawSize.pillCompact,
+    val heightPillRegular: Dp = RawSize.pillRegular,
+    val heightPillLarge: Dp = RawSize.pillLarge,
+    val thicknessRule: Dp = RawSize.hairline,
+    val sizeDot: Dp = RawSize.selectedDot,
+    val elevationResting: Dp = RawSize.elevationResting,
+    val elevationRaised: Dp = RawSize.elevationRaised,
 ) {
     companion object {
         /**
