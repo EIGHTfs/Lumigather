@@ -23,10 +23,10 @@ internal object CategoryColorFixture {
  * 没连那台机器时这张图会走失败分支 —— 正好验证「失败只影响本格」。
  */
 internal const val SAMPLE_MEDIA_URL =
-    "http://10.10.31.59:8081/api/media?file=%2Fvolume6%2FGame.Patch%20N%20MOD%2FmiHoYo%2Floading-logo.png"
+    "http://example.com/api/media?file=%2Fsample%2Floading-logo.png"
 
 /** 故意指向不存在的路径，用来演示失败态（真实坏图在运行时会走到同一分支）。 */
-internal const val SAMPLE_BROKEN_URL = "http://10.10.31.59:8081/api/media?file=%2Fnonexistent.png"
+internal const val SAMPLE_BROKEN_URL = "http://example.com/api/media?file=%2Fnonexistent.png"
 
 /**
  * 假图片项：字段与真实 `images[]` 逐一对齐（含长路径与 ISO 时间），

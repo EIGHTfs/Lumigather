@@ -99,7 +99,7 @@ fun ComponentsShowcase(
             ShowcaseSection(title = "三态占位：加载 / 空 / 错误（带重试）") {
                 AppLoading()
                 AppEmpty(hint = "换个分类试试")
-                AppError(hint = "无法连接服务器 10.10.31.59:8081", onRetry = {})
+                AppError(hint = "无法连接服务器 example.com:8080", onRetry = {})
             }
         }
     }

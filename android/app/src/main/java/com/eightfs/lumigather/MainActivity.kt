@@ -1,12 +1,13 @@
-// 安卓端唯一入口 Activity：只做"搭壳 + 注册适配器 + 打开 Kuikly 页面"三件事。
+// 安卓端唯一入口 Activity：只做"搭壳 + 装上下文 + 注册适配器 + 打开 Kuikly 页面"四件事。
 //
-// 为什么界面全在 Kuikly 侧：业务界面（三栏、网格、详情）都在 shared 的 ui/screens 里，
-// 这里只负责提供一个能承载 Kuikly 渲染视图的容器。这样换壳（加启动页、多入口、深链）不必碰业务代码。
+// 界面全在 Kuikly 侧（shared 的 ui/screens）。这里不提供任何业务配置：
+// 服务端地址由用户在 App 内填写并持久化，宿主不替用户决定，也不再保留兜底地址。
 //
-// 三个必须按顺序做的步骤（顺序错了会静默失败，编译期看不出来）：
-// 1) 注册图片适配器 —— 不注册则所有图片永远停在占位态；
-// 2) 先把容器挂进窗口 —— 渲染视图要等容器有了大小才初始化；
-// 3) 用 delegator 打开页面 —— 页面由 KSP 生成的注册表按 pageName 创建。
+// 四步的顺序都是硬要求（顺序错了会静默失败，编译期看不出来）：
+// 1) 装应用上下文 —— 页面要读写 SharedPreferences 才能拿到服务器地址；
+// 2) 注册图片适配器 —— 不注册则所有图片永远停在占位态；
+// 3) 把容器挂进窗口 —— 渲染视图要等容器有了大小才初始化；
+// 4) 用 delegator 打开页面 —— 页面由 KSP 生成的注册表按 pageName 创建。
 
 package com.eightfs.lumigather
 
@@ -17,13 +18,7 @@ import com.tencent.kuikly.core.render.android.adapter.KuiklyRenderAdapterManager
 import com.tencent.kuikly.core.render.android.expand.KuiklyRenderViewBaseDelegator
 import com.tencent.kuikly.core.render.android.expand.KuiklyRenderViewBaseDelegatorDelegate
 import ui.screens.HOME_PAGE_NAME
-
-// 服务端地址。放在宿主而不是页面层：换机器/换端口只改这里一处；
-// 将来做"服务器设置页"时，这里会变成从持久化配置读取的入口。
-private const val SERVER_BASE_URL = "http://10.10.31.59:8081"
-
-// 传给页面的数据键名，需与页面侧读取的键一致。
-private const val PAGE_DATA_BASE_URL = "baseUrl"
+import ui.screens.settings.AndroidHostContext
 
 // JVM 执行模式下 contextCode 传空串（Kuikly 官方的约定：代码在本地 Kotlin 侧，不动态下发）。
 private const val CONTEXT_CODE_JVM = ""
@@ -34,6 +29,9 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // 1) 上下文：页面侧的 SharedPreferences 存储靠它拿到 Context
+        AndroidHostContext.install(this)
+        // 2) 图片适配器：漏了这步图片全白，是最容易误判成"网络不通"的静默失败
         registerImageAdapter()
 
         val container = FrameLayout(this)
@@ -44,7 +42,8 @@ class MainActivity : AppCompatActivity() {
             container,
             CONTEXT_CODE_JVM,
             HOME_PAGE_NAME,
-            createPageData(),
+            // 页面启动参数留空：地址来自用户配置，不再由宿主注入
+            emptyMap(),
         )
     }
 
@@ -65,7 +64,15 @@ class MainActivity : AppCompatActivity() {
         pageDelegator.onDetach()
     }
 
-    // 先让 Kuikly 页面处理返回键（例如收起侧栏），它不处理才交回系统退出。
+    /**
+     * 返回键：先问 Kuikly 页面，页面不要才退出应用。
+     *
+     * 页面侧只在"有东西可收"时才注册返回回调（侧栏开着 / 停在设置界面且有旧配置），
+     * Kuikly 依据"回调列表是否为空"回报 consumed：
+     * - consumed=true  → 页面已处理（收侧栏 / 退出设置），这里什么都不做；
+     * - consumed=false → 页面没处理，交给系统退出。
+     * 所以页面不注册回调时，返回键行为与没接这套逻辑时完全一致。
+     */
     @Deprecated("AppCompatActivity 上仍走 onBackPressed，等升级到 OnBackPressedDispatcher 再替换")
     override fun onBackPressed() {
         if (!pageDelegator.onBackPressed()) {
@@ -77,7 +84,7 @@ class MainActivity : AppCompatActivity() {
     /**
      * 注册渲染层需要的适配器。
      *
-     * 判断里带 == null 是官方 demo 的写法：宿主可能有多个入口，重复覆盖会打断正在加载的图片
+     * `== null` 判断来自官方 demo：宿主可能有多个入口，重复覆盖会打断正在加载的图片
      * （旧适配器的线程池与缓存被丢弃，正在加载的格子会拿到空结果）。
      */
     private fun registerImageAdapter() {
@@ -86,11 +93,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // 页面需要的启动参数。目前只有服务端地址，后续加"主题模式""默认分类"也走这里，
-    // 不在页面里写死。
-    private fun createPageData(): Map<String, Any> = mapOf(PAGE_DATA_BASE_URL to SERVER_BASE_URL)
-
     // 宿主委托：所有回调都用接口默认实现。
-    // 显式写一个对象而不是传 null，是为了将来要接"页面加载完成/异常"回调时只改这里。
+    // 显式写一个对象而不是传 null，是为了将来接"页面加载完成/异常"回调时只改这里。
     private object HostDelegate : KuiklyRenderViewBaseDelegatorDelegate
 }

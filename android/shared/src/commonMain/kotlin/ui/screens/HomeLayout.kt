@@ -42,9 +42,10 @@ object HomeLayout {
     // 网格四周留白不在这里定义：它等于 metrics.spacingLg（16），
     // 复用一个已有语义比再声明一个同值常量更不容易漂移。
 
-    // 图标按钮里用的字形。没有图标资源，用等宽符号代替，避免为三个图标引入图标库。
+    // 图标按钮里用的字形。没有图标资源，用等宽符号代替，避免为几个图标引入图标库。
     const val iconMenu: String = "☰"
     const val iconRefresh: String = "⟳"
+    const val iconSettings: String = "⚙"
     const val iconClose: String = "✕"
     const val iconServer: String = "🖥"
     const val iconSearch: String = "🔍"

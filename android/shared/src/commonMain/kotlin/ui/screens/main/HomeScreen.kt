@@ -50,6 +50,7 @@ fun HomeScreen(
     onOpenImage: (ImageItem) -> Unit,
     onLoadMore: () -> Unit,
     onRetry: () -> Unit,
+    onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = AppTheme.colors
@@ -59,7 +60,12 @@ fun HomeScreen(
             .fillMaxSize()
             .background(colors.background),
     ) {
-        TopBar(state = state, onOpenLeftSidebar = onOpenLeftSidebar, onRetry = onRetry)
+        TopBar(
+            state = state,
+            onOpenLeftSidebar = onOpenLeftSidebar,
+            onRetry = onRetry,
+            onOpenSettings = onOpenSettings,
+        )
         CategoryChipsRow(state = state, onSelectCategory = onSelectCategory)
 
         // weight(1f)：网格吃掉顶栏与底栏之外的全部高度，翻页与滚动都在这块里发生
@@ -87,6 +93,7 @@ private fun TopBar(
     state: HomeUiState,
     onOpenLeftSidebar: () -> Unit,
     onRetry: () -> Unit,
+    onOpenSettings: () -> Unit,
 ) {
     val colors = AppTheme.colors
     val metrics = AppTheme.metrics
@@ -96,7 +103,7 @@ private fun TopBar(
             .fillMaxWidth()
             .padding(horizontal = metrics.spacingLg, vertical = metrics.spacingSm),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(metrics.spacingSm),
+        horizontalArrangement = Arrangement.spacedBy(metrics.spacingXs),
     ) {
         AppIconButton(onClick = onOpenLeftSidebar) {
             Text(text = HomeLayout.iconMenu, color = colors.textPrimary, fontSize = metrics.fontTitle)
@@ -106,6 +113,12 @@ private fun TopBar(
 
         AppIconButton(onClick = onRetry) {
             Text(text = HomeLayout.iconRefresh, color = colors.textPrimary, fontSize = metrics.fontBody)
+        }
+
+        // 设置入口：换服务器地址用。放在顶栏最右，与"重试"相邻但不混同 ——
+        // 重试是"再试一次当前配置"，设置是"我要换一个服务器"，两者的失败场景完全不同。
+        AppIconButton(onClick = onOpenSettings) {
+            Text(text = HomeLayout.iconSettings, color = colors.textPrimary, fontSize = metrics.fontBody)
         }
     }
 }

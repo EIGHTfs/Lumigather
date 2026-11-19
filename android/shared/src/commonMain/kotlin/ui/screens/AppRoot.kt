@@ -1,4 +1,5 @@
 // 三栏骨架的根：主界面常驻，两侧栏从边缘滑出，中间那层遮罩负责"点一下收起"。
+// 未配置服务器地址时，这里直接渲染设置界面（此时三栏骨架不参与组合）。
 //
 // 为什么位移/缩放/模糊都集中在这一个文件：这三件事必须**同时**发生才像"被推开"——
 // 主界面右移、缩小、背景模糊、遮罩变暗、侧栏滑入。分散到各页面里写，就会出现
@@ -16,7 +17,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.withFrameNanos
 import com.eightfs.lumigather.data.ApiClient
 import com.eightfs.lumigather.data.HttpTransport
-import com.eightfs.lumigather.data.LumigatherRepository
+import com.tencent.kuikly.compose.BackHandler
 import com.tencent.kuikly.compose.ComposeContainer
 import com.tencent.kuikly.compose.foundation.background
 import com.tencent.kuikly.compose.foundation.clickable
@@ -38,18 +39,18 @@ import theme.AppTheme
 import theme.LumigatherTheme
 import theme.ThemeMode
 import ui.screens.main.HomeScreen
+import ui.screens.settings.ServerAddressStore
+import ui.screens.settings.ServerSettingsScreen
+import ui.screens.settings.createServerAddressStore
 import ui.screens.sidebar.LeftSidebar
 import ui.screens.sidebar.RightSidebar
 import ui.screens.state.HomeStateHolder
+import ui.screens.state.HomeUiState
 
 // 页面名：:app 侧打开页面时用它（也是 KSP 生成的页面注册表里的键）。
 // 公开而不是私有：宿主那边要引用同一个常量，两处各写一份字符串迟早会漂移，
 // 而漂移的后果是"装上去只看到空白页"，很难一眼看出是拼写问题。
 const val HOME_PAGE_NAME = "LumigatherHome"
-
-// 宿主通过 pageData 传进来的服务端地址键名。地址不在 UI 层写死：
-// 换机器/换端口只改宿主一处，页面代码不动。
-private const val PAGE_DATA_BASE_URL = "baseUrl"
 
 /**
  * 传输层工厂的平台声明。
@@ -60,24 +61,73 @@ private const val PAGE_DATA_BASE_URL = "baseUrl"
 expect fun createDefaultHttpTransport(): HttpTransport
 
 /**
- * 根组合：拿到状态持有者，把它翻译成三层版面。
+ * 根组合：状态在设置态就画设置界面，否则画三栏骨架。
  *
- * @param repository 数据入口，由页面入口注入（预览/自检时可以塞假实现）
+ * @param clientFactory 按地址造 ApiClient。改地址后需要换掉整个 ApiClient，所以传工厂而不是实例
+ * @param addressStore  地址持久化入口（真机上是 SharedPreferences）
  */
 @Composable
 fun AppRoot(
-    repository: LumigatherRepository,
+    clientFactory: (String) -> ApiClient,
+    addressStore: ServerAddressStore,
     modifier: Modifier = Modifier,
-    stateHolder: HomeStateHolder = remember(repository) { HomeStateHolder(repository) },
+    stateHolder: HomeStateHolder = remember(clientFactory, addressStore) {
+        HomeStateHolder(clientFactory, addressStore)
+    },
 ) {
-    val colors = AppTheme.colors
     val scope = rememberCoroutineScope()
 
     // 读 state 的字段即订阅：任何 mutate 都会让下面重画
     val state = stateHolder.state
 
-    // 启动链路只跑一次：拉分类 → 选中第一个 → 拉第一页 → 后台补张数
+    // 启动链路只跑一次：读地址 →（没配就进设置态）分类 → 第一页 → 后台补张数
     LaunchedEffect(stateHolder) { stateHolder.bootstrap() }
+
+    registerBackHandling(state = state, stateHolder = stateHolder)
+
+    if (state.settingsOpen) {
+        ServerSettingsScreen(
+            state = state,
+            onAddressChange = stateHolder::updateAddressDraft,
+            onTestConnection = { scope.launch { stateHolder.testAddress() } },
+            onSave = { scope.launch { stateHolder.saveAddress() } },
+            onClose = stateHolder::closeSettings,
+            modifier = modifier,
+        )
+        return
+    }
+
+    MainScaffold(state = state, stateHolder = stateHolder, modifier = modifier)
+}
+
+/**
+ * 返回键分级处理。
+ *
+ * 规则：设置界面（且已有旧配置）→ 退回主界面；侧栏开着 → 收起侧栏；都没有 → 什么都不注册。
+ *
+ * 为什么"没有就不注册"是硬要求：Kuikly 判断一次返回是否被消费，依据是页面返回回调列表是否非空
+ * （Pager 收到 back 事件时先看 getBackPressHandler().backPressCallbackList，非空才回
+ * consumed=1 并分发给我们）。常驻注册会让每次返回都被消费，用户就再也退不出应用。
+ */
+@Composable
+private fun registerBackHandling(state: HomeUiState, stateHolder: HomeStateHolder) {
+    when {
+        state.settingsOpen && state.hasSavedAddress -> BackHandler { stateHolder.closeSettings() }
+        state.settingsOpen -> Unit
+        state.leftSidebarOpen || state.rightSidebarOpen -> BackHandler { stateHolder.closeSidebars() }
+        else -> Unit
+    }
+}
+
+// 三栏骨架本体：主界面 + 遮罩 + 左右侧栏 + 左边缘手势。
+@Composable
+private fun MainScaffold(
+    state: HomeUiState,
+    stateHolder: HomeStateHolder,
+    modifier: Modifier = Modifier,
+) {
+    val colors = AppTheme.colors
+    val scope = rememberCoroutineScope()
 
     // 两个侧栏各自的动画进度。左右用同一条曲线与时长，手感才一致。
     val leftProgress = animatedProgress(state.leftSidebarOpen)
@@ -115,6 +165,7 @@ fun AppRoot(
                 onOpenImage = stateHolder::openDetail,
                 onLoadMore = { scope.launch { stateHolder.loadMore() } },
                 onRetry = { scope.launch { stateHolder.retry() } },
+                onOpenSettings = stateHolder::openSettings,
             )
         }
 
@@ -128,7 +179,7 @@ fun AppRoot(
             )
         }
 
-        // 第三层左：分类栏。从屏幕外(chin)滑进来：进度 0 时整体左移一个栏宽。
+        // 第三层左：分类栏。进度 0 时整体左移一个栏宽，等于藏在屏幕外。
         if (leftProgress > 0f) {
             LeftSidebar(
                 state = state,
@@ -180,8 +231,8 @@ fun AppRoot(
 /**
  * Kuikly 页面入口。
  *
- * 三件事：从 pageData 取服务端地址 → 建数据层 → 把主题与根组合挂上去。
- * 这里不写任何布局：布局全在 [AppRoot] 及其子页面里，页面类只做装配。
+ * 只做装配：造传输层与存储、把 clientFactory 交给根组合。这里不写布局，也不碰业务状态。
+ * 服务端地址不经过宿主传入 —— 它由用户填写并持久化，宿主无权替用户决定。
  */
 @Page(HOME_PAGE_NAME)
 class LumigatherHomePage : ComposeContainer() {
@@ -190,23 +241,21 @@ class LumigatherHomePage : ComposeContainer() {
         super.willInit()
 
         setContent {
-            // 地址在组合期读：pageData 要等页面 attach 之后才有值，willInit 阶段可能还是空的
-            val baseUrl = remember { resolveBaseUrl() }
-            val repository = remember(baseUrl) {
-                LumigatherRepository(ApiClient(baseUrl, createDefaultHttpTransport()))
+            // 传输层全局共享一份：OkHttp 的连接池与线程池就是为共享设计的，
+            // 改地址时只换 ApiClient，不重建传输层。
+            val transport = remember { createDefaultHttpTransport() }
+            val addressStore = remember { createServerAddressStore() }
+            // 工厂必须 remember：lambda 每次重组都是新对象，会让 stateHolder 跟着重建、
+            // bootstrap 反复重跑（表现是首屏反复转圈）。
+            val clientFactory: (String) -> ApiClient = remember(transport) {
+                { address -> ApiClient(address, transport) }
             }
 
             LumigatherTheme(mode = ThemeMode.Light) {
-                AppRoot(repository = repository)
+                AppRoot(clientFactory = clientFactory, addressStore = addressStore)
             }
         }
     }
-
-    // 读宿主传进来的服务端地址。读不到就给空串，让数据层报"地址无效"，
-    // 由页面正常显示错误态与重试入口 —— 比在这里崩掉或猜一个默认地址都好。
-    private fun resolveBaseUrl(): String = runCatching {
-        pageData.params.optString(PAGE_DATA_BASE_URL, "")
-    }.getOrDefault("")
 }
 
 // 侧栏滑入/滑出时长。220ms 属"能感知到滑动、又不拖沓"的区间（动画惯例 200~250ms）。
