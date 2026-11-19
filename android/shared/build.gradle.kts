@@ -33,12 +33,28 @@ kotlin {
                 implementation("com.tencent.kuikly-open:compose:$KUIKLY_VERSION")
                 // core-annotations：@Page 等注解，供 KSP 生成页面注册表
                 implementation("com.tencent.kuikly-open:core-annotations:$KUIKLY_VERSION")
+                // 协程：数据层对 UI 暴露 suspend 接口（挂起而不是阻塞 UI 线程），
+                // 传输层用 Dispatchers.IO 跑阻塞调用。1.8.1 与 Kuikly 传递依赖的版本一致，
+                // 且本机 Gradle 缓存里已有，不会引入新的下载与版本协商。
+                implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")
             }
         }
         val androidMain by getting {
             dependencies {
                 // 渲染器放 androidMain 并 api 出去：:app 依赖本模块后就能拿到渲染层，无需重复声明
                 api("com.tencent.kuikly-open:core-render-android:$KUIKLY_VERSION")
+                // HTTP 客户端：OkHttp 是纯 JVM 库，放 androidMain 不参与 KMP 变体解析，
+                // 与 Kuikly 2.17.0-2.1.21 / AGP 7.4.2 之间没有 metadata 协商风险。
+                // 4.10.0 是本机 Gradle 缓存里已有的版本（Kuikly 传递依赖带入），无需额外下载。
+                implementation("com.squareup.okhttp3:okhttp:4.10.0")
+            }
+        }
+        val androidUnitTest by getting {
+            dependencies {
+                // 数据层的解析/编码/错误映射都是纯逻辑，用普通 JVM 单测就能覆盖，不需要设备。
+                // kotlin-test 会按当前 target 自动选 JUnit4 变体，junit 显式声明是为了版本确定。
+                implementation(kotlin("test"))
+                implementation("junit:junit:4.13.2")
             }
         }
     }
