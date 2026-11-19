@@ -1,8 +1,20 @@
 // 安卓外壳模块：只放 Activity / 清单 / 图标这类「平台外壳」，业务 UI 全在 :shared。
 // 这样以后换壳（比如加启动页、多个入口 Activity）不会碰到业务代码。
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     kotlin("android")
+}
+
+// release 签名凭据从 keystore.properties 读（该文件与 keystore/*.jks 一并入库）。
+// 为什么用 Properties 而不是写死在 build.gradle.kts：证书口令与「构建逻辑」是两件事，
+// 分开后换证书只改一处，也不会把口令混进版本控制里的构建脚本。
+val keystorePropertiesFile = rootProject.file("keystore.properties")
+val keystoreProperties = Properties().apply {
+    if (keystorePropertiesFile.exists()) {
+        keystorePropertiesFile.inputStream().use { input -> load(input) }
+    }
 }
 
 android {
@@ -14,16 +26,37 @@ android {
         minSdk = 24
         // 32：Kuikly 渲染器与官方 demo 一致的 targetSdk，先跟随官方组合，后续要上架再单独评估
         targetSdk = 32
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 1119
+        versionName = "0.0.1-1119"
+    }
+
+    // release 打包时跳过 lintVital。
+    // 原因（实测报错原文）：本机 build-tools 是 37.0.0，而 AGP 7.4.2 的 lint 只接受整数版本号，
+    // 解析时报 java.lang.NumberFormatException: For input string: "37.0" —— lint 进程自己崩了，
+    // 与我们代码无关。lint 属静态检查、不是功能验证，不该阻断发布；
+    // 需要静态检查时另用与 AGP 匹配的 build-tools 单独跑。
+    lint {
+        checkReleaseBuilds = false
+        abortOnError = false
+    }
+
+    signingConfigs {
+        create("release") {
+            // 必须用 rootProject.file：本文件在 app 模块下，裸 file() 会解析成 android/app/keystore/…
+            // 而 keystore.properties 里的相对路径是相对 android/ 根写的。
+            storeFile = rootProject.file(keystoreProperties.getProperty("storeFile"))
+            storePassword = keystoreProperties.getProperty("storePassword")
+            keyAlias = keystoreProperties.getProperty("keyAlias")
+            keyPassword = keystoreProperties.getProperty("keyPassword")
+        }
     }
 
     buildTypes {
         getByName("release") {
             isMinifyEnabled = false
-            // 骨架阶段 release 也临时用 debug 证书，保证 assembleRelease 能直接出包；
-            // 正式签名证书在发布前单独配置
-            signingConfig = signingConfigs.getByName("debug")
+            // 正式证书签名：证书一旦丢失或更换，已发布版本将无法升级（用户须卸载重装）。
+            // 证书与口令见 android/keystore* 两处，务必长期保留。
+            signingConfig = signingConfigs.getByName("release")
         }
     }
 

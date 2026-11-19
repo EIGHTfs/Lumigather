@@ -8,3 +8,9 @@ local.properties
 .idea/
 *.iml
 captures/
+
+# release 签名凭据：绝不允许进入公开仓库。
+# 证书与口令的实际存放位置是私有仓 ai-work-archive/credentials/lumigather-android/，
+# 构建前复制回 keystore/ 与 keystore.properties 即可。
+keystore/
+keystore.properties

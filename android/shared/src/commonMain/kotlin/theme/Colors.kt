@@ -29,6 +29,11 @@ import com.tencent.kuikly.compose.ui.graphics.lerp
 data class Colors(
     val background: Color,
     val backgroundAlt: Color,
+    // 页面背景的竖向渐变两端：顶部偏蓝、底部偏白。
+    // 单独开两个槽而不是复用 background/backgroundAlt，是因为渐变端点与「卡片放在什么底色上」
+    // 是两件事 —— 后者要留出浮起的余地，前者只负责页面顶到底的过渡观感。
+    val backgroundGradientTop: Color,
+    val backgroundGradientBottom: Color,
     val surface: Color,
     val surfaceHigh: Color,
     val container: Color,
@@ -52,6 +57,8 @@ data class Colors(
         val Light = Colors(
             background = RawColors.mist,
             backgroundAlt = RawColors.mistBottom,
+            backgroundGradientTop = RawColors.mistTop,
+            backgroundGradientBottom = RawColors.mistBottom,
             surface = RawColors.mistLowest,
             surfaceHigh = RawColors.mistLow,
             container = RawColors.mistContainer,
@@ -76,6 +83,8 @@ data class Colors(
         val Dark = Colors(
             background = RawColors.nightBase,
             backgroundAlt = RawColors.nightBottom,
+            backgroundGradientTop = RawColors.nightTop,
+            backgroundGradientBottom = RawColors.nightBottom,
             surface = RawColors.nightTop,
             surfaceHigh = lerp(RawColors.nightTop, RawColors.mistLowest, RawAlpha.DarkLiftSurface),
             container = lerp(RawColors.nightTop, RawColors.mistLowest, RawAlpha.DarkLiftContainer),

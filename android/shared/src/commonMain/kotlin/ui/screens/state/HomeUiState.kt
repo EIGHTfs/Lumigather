@@ -288,6 +288,12 @@ class HomeStateHolder(
         mutate { it.copy(leftSidebarOpen = true, rightSidebarOpen = false) }
     }
 
+    // 手势开右栏：不指定图片。右栏自己会处理 selectedImage == null 的空态，
+    // 所以从右侧边缘滑出时看到的是「提示去点图片」而不是空白面板。
+    fun openRightSidebar() {
+        mutate { it.copy(rightSidebarOpen = true, leftSidebarOpen = false) }
+    }
+
     fun openDetail(image: ImageItem) {
         mutate { it.copy(rightSidebarOpen = true, selectedImage = image, leftSidebarOpen = false) }
     }

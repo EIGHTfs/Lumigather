@@ -12,6 +12,8 @@ package ui.screens
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.withFrameNanos
@@ -31,6 +33,7 @@ import com.tencent.kuikly.compose.setContent
 import com.tencent.kuikly.compose.ui.Alignment
 import com.tencent.kuikly.compose.ui.Modifier
 import com.tencent.kuikly.compose.ui.graphics.BlurEffect
+import com.tencent.kuikly.compose.ui.graphics.Brush
 import com.tencent.kuikly.compose.ui.graphics.graphicsLayer
 import com.tencent.kuikly.compose.ui.input.pointer.pointerInput
 import com.tencent.kuikly.core.annotations.Page
@@ -129,21 +132,85 @@ private fun MainScaffold(
     val colors = AppTheme.colors
     val scope = rememberCoroutineScope()
 
+    // 手势拖动中的实时进度；null 表示没有手指在拖，此时交给吸附动画。
+    // 这两条状态是「跟手」的唯一开关：非 null 时 animatedProgress 直接返回它的值。
+    var leftDragProgress by remember { mutableStateOf<Float?>(null) }
+    var rightDragProgress by remember { mutableStateOf<Float?>(null) }
+
     // 两个侧栏各自的动画进度。左右用同一条曲线与时长，手感才一致。
-    val leftProgress = animatedProgress(state.leftSidebarOpen)
-    val rightProgress = animatedProgress(state.rightSidebarOpen)
+    val leftProgress = animatedProgress(state.leftSidebarOpen, leftDragProgress)
+    val rightProgress = animatedProgress(state.rightSidebarOpen, rightDragProgress)
     // 任一侧栏打开都要把主界面推开并压暗，所以取两者的较大值作为"整体打开程度"。
     val openProgress = if (leftProgress > rightProgress) leftProgress else rightProgress
 
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(colors.background),
+            // 页面背景用竖向渐变（顶部偏蓝、底部偏白），纯色会让整屏显得"糊成一片"。
+            // 端点取自主题语义色，不在这里写死色值。
+            .background(
+                Brush.verticalGradient(
+                    listOf(colors.backgroundGradientTop, colors.backgroundGradientBottom),
+                ),
+            ),
     ) {
         // 第一层：主界面。位移方向由"哪一侧打开"决定：左栏开则右移，右栏开则左移。
         Box(
             modifier = Modifier
                 .fillMaxSize()
+                // 跟手拖动：整块主界面参与，方向决定开哪一侧（右滑开左栏 / 左滑开右栏）。
+                // 不做「起手必须落在边缘」的限制 —— 那是为了一条窄热区做的妥协；既然整块
+                // 界面都参与，起手位置就不该再限制，否则手感会像「要先瞄准」。
+                // 拖动过程中把手指位移直接写进 dragProgress（侧栏贴着手指走），松手才吸附。
+                // key 带上侧栏状态：闭包要读最新值，状态变化时重建一次即可（那时手势已结束）。
+                .pointerInput(state.leftSidebarOpen, state.rightSidebarOpen) {
+                    val sidebarWidthPx = HomeLayout.sidebarWidth.toPx()
+                    // 0=还没决定方向 1=拖左栏 2=拖右栏。方向在第一次移动时定下，全程不变。
+                    var draggingSide = 0
+                    var accumulated = 0f
+                    detectHorizontalDragGestures(
+                        onDragStart = {
+                            draggingSide = 0
+                            accumulated = 0f
+                        },
+                        onDragEnd = {
+                            // 松手吸附：拖过栏宽 1/3 就全开，否则回弹。
+                            // 左右用同一个比例，手感才对称。
+                            val commitDistance = sidebarWidthPx / SIDEBAR_COMMIT_FRACTION
+                            when {
+                                draggingSide == 1 && accumulated > commitDistance ->
+                                    stateHolder.openLeftSidebar()
+                                draggingSide == 2 && accumulated < -commitDistance ->
+                                    stateHolder.openRightSidebar()
+                                draggingSide != 0 -> stateHolder.closeSidebars()
+                                else -> Unit
+                            }
+                            // 交还控制权给吸附动画：先清掉拖动值，让 animatedProgress 从
+                            // 松开时的位置接着走，视觉上不会跳。
+                            leftDragProgress = null
+                            rightDragProgress = null
+                            draggingSide = 0
+                        },
+                        onDragCancel = {
+                            leftDragProgress = null
+                            rightDragProgress = null
+                            draggingSide = 0
+                        },
+                        onHorizontalDrag = { _, dragAmount ->
+                            accumulated += dragAmount
+                            if (draggingSide == 0) {
+                                draggingSide = if (dragAmount > 0f) 1 else if (dragAmount < 0f) 2 else 0
+                            }
+                            // 进度 = 已拖距离 / 栏宽，钳在 0..1。这就是「跟手」：
+                            // 拖到一半松手，侧栏就停在一半的位置往回弹或往前吸。
+                            if (draggingSide == 1) {
+                                leftDragProgress = (accumulated / sidebarWidthPx).coerceIn(0f, 1f)
+                            } else if (draggingSide == 2) {
+                                rightDragProgress = (-accumulated / sidebarWidthPx).coerceIn(0f, 1f)
+                            }
+                        },
+                    )
+                }
                 .graphicsLayer {
                     val scale = 1f - HomeLayout.mainScaleDelta * openProgress
                     scaleX = scale
@@ -208,23 +275,8 @@ private fun MainScaffold(
             )
         }
 
-        // 左边缘手势热区：从最左侧往右拖即开分类栏。
-        // 只在两侧栏都收着时挂上去，否则会跟侧栏内部的点击/输入抢事件。
-        if (!state.leftSidebarOpen && !state.rightSidebarOpen) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.CenterStart)
-                    .width(HomeLayout.edgeSwipeWidth)
-                    .fillMaxHeight()
-                    // 手势的 key 用空 Unit：这个热区没有需要随状态重建的输入，重建反而会丢手势
-                    .pointerInput(Unit) {
-                        detectHorizontalDragGestures { _, dragAmount ->
-                            // 只认向右的位移：向左拖是"关"，但此时侧栏本来就是关的，不用处理
-                            if (dragAmount > 0f) stateHolder.openLeftSidebar()
-                        }
-                    },
-            )
-        }
+        // 边缘滑动已改为主界面全屏接管（见上方 Box 的 pointerInput），
+        // 原「左边缘 20dp 窄热区」已移除 —— 那条缝要求手指精确落点，真机上很难触发。
     }
 }
 
@@ -261,6 +313,10 @@ class LumigatherHomePage : ComposeContainer() {
 // 侧栏滑入/滑出时长。220ms 属"能感知到滑动、又不拖沓"的区间（动画惯例 200~250ms）。
 private const val SIDEBAR_ANIMATION_MS = 220f
 
+// 松手吸附的分界：拖过栏宽的 1/3 就全开，否则回弹。
+// 取 1/3 而不是 1/2：手指常常只拖一小段就想开，门限太高会让「拖了却没反应」的挫败感更强。
+private const val SIDEBAR_COMMIT_FRACTION = 3f
+
 // 帧时间戳是纳秒，进度按毫秒算，这里做一次单位换算。
 private const val NANOS_PER_MILLI = 1_000_000f
 
@@ -276,10 +332,19 @@ private const val NANOS_PER_MILLI = 1_000_000f
  * 不需要弹簧、不需要中途打断重定向。
  */
 @Composable
-private fun animatedProgress(open: Boolean): Float {
+private fun animatedProgress(open: Boolean, dragProgress: Float?): Float {
     val progress = remember { mutableStateOf(if (open) 1f else 0f) }
 
-    LaunchedEffect(open) {
+    LaunchedEffect(open, dragProgress) {
+        // 拖动中：把手指当前位置同步进来，然后立刻返回，不跑吸附动画 ——
+        // 这一段是「跟手」的关键，侧栏位置完全由手指决定。
+        if (dragProgress != null) {
+            progress.value = dragProgress
+            return@LaunchedEffect
+        }
+
+        // 松手（dragProgress 变回 null）：从「手指松开时的位置」继续走到目标。
+        // 因为上面已经把这个位置写进 progress，这里的 from 就是离开点，不会跳变。
         val from = progress.value
         val to = if (open) 1f else 0f
         if (from == to) return@LaunchedEffect
