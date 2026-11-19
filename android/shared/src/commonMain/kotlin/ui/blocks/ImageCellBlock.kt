@@ -69,23 +69,35 @@ fun ImageCellBlock(
             .background(colors.container)
             .then(if (onClick == null) Modifier else Modifier.clickable(onClick = onClick)),
     ) {
+        // Image 必须无条件挂在树里：Kuikly 的 AsyncImagePainter 靠「被 Image 绘制」才发起加载。
+        // 若按状态条件渲染（只有 Ready 才挂 Image），会形成死锁 —— 不挂 Image 就不加载，
+        // 不加载就永远等不到 onSuccess，状态永远停在 Loading，格子一直显示底色。
+        // 因此这里始终渲染图片，未就绪时用底色遮住，失败时再盖出错误文案。
+        Image(
+            painter = painter,
+            contentDescription = name,
+            modifier = Modifier.fillMaxSize(),
+            contentScale = ContentScale.Crop,
+        )
+
         when (phase) {
-            ImageCellState.Ready -> Image(
-                painter = painter,
-                contentDescription = name,
-                modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop,
+            // 加载中：用底色盖住尚未解码完成的画布，避免半张图闪一下
+            ImageCellState.Loading -> Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(colors.container),
             )
 
-            // 加载中只留底色：网格里同时出现几十个转圈会晃眼，而且首屏图片通常在几百毫秒内到齐
-            ImageCellState.Loading -> Unit
-
             ImageCellState.Failed -> Box(
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(colors.container),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(text = "无法加载", color = colors.textGhost, fontSize = metrics.fontMicro)
             }
+
+            ImageCellState.Ready -> Unit
         }
 
         if (sizeText.isNotBlank() && phase == ImageCellState.Ready) {

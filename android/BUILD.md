@@ -124,6 +124,37 @@ cachedCategories = cachedCategories.map { /* 只改自己那一个 */ }
 
 **判据**：并发体里出现对共享状态的写，先问「这个读-改-写会不会被另一个协程夹在中间」；能用「收集后合并」的就不要边算边写。
 
+### 坑 8：条件渲染 AsyncImagePainter 会导致永远 Loading（死锁）
+
+**现象**：网格里每张图都停在加载态底色，不报错、不显示「无法加载」，数据本身是好的（标题上的计数正常）。
+
+**根因**：Kuikly 的 `AsyncImagePainter` **靠「被 Image 组件绘制」才发起加载**。如果按状态条件渲染：
+
+```kotlin
+when (phase) {
+    Ready  -> Image(painter = painter, ...)   // 只有 Ready 才挂 Image
+    Loading -> 底色                            // 可 Ready 要等 onSuccess
+    Failed  -> 文字                            // 而 onSuccess 又要 painter 被绘制
+}
+```
+
+就形成死锁：不挂 Image → painter 不加载 → 永远等不到 `onSuccess` → 状态永远 `Loading` → 永远不挂 Image。
+
+**解决**：让 `Image` **无条件**挂在树里，用遮罩盖住未就绪状态：
+
+```kotlin
+Image(painter = painter, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+when (phase) {
+    Loading -> Box(Modifier.fillMaxSize().background(colors.container))   // 盖住
+    Failed  -> Box(...) { Text("无法加载") }                                // 盖住并提示
+    Ready   -> Unit
+}
+```
+
+**判据**：凡是「按状态决定是否渲染持有异步资源的组件」，先问一句「这个资源的加载是不是由该组件被渲染触发的」。若是，就不能条件渲染 —— 该常驻并用遮罩/透明度控制可见性。
+
+**这个 bug 为什么能躲过所有静态检查**：编译通过、三态状态机单看完整、打包与签名都正常。它是「控制流 × 组件生命周期」的交互缺陷，只有真机才暴露。定位线索是「数据已到位但渲染停在 Loading」，据此排除网络与数据层，直接指向渲染链。
+
 ## 五、验收（四条，缺一不可）
 
 ```bash
