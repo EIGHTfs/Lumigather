@@ -92,6 +92,38 @@ android/
 现象：解析依赖时长时间卡住（Gradle 插件门户与 Maven Central 直连不稳）。
 做法：`gradle/maven-mirror.init.gradle` 由 `gradlew` 以 `-I` 注入，把 `plugins.gradle.org`、`repo.maven.apache.org`、`repo1.maven.org` 改写到腾讯镜像；`google()` 与自建仓库不动。
 
+### 坑 6：单测输出里的中文全变成 `?`
+
+**现象**：测试断言全绿，但控制台与 XML 里的中文（如分类名）全是 `?`，数字与 URL 正常。
+
+**根因**：Gradle 测试跑在 fork 出的 JVM 里，其默认字符集取自环境 locale。本机未设 `LANG` 时 JDK 17 退回 ASCII，`PrintStream` 编码时把非 ASCII 替换成 `?`。改 `LANG` / `LC_ALL` 对**已经启动**的 JVM 无效。
+
+**做法**：给 gradlew 加编码参数，测试 worker 会继承：
+
+```
+JDK_JAVA_OPTIONS='-Dfile.encoding=UTF-8 -Dsun.stdout.encoding=UTF-8 -Dsun.stderr.encoding=UTF-8' \
+  JAVA_HOME=<jdk17> GRADLE_USER_HOME=<编译根>/gradle-home \
+  bash gradlew :shared:testDebugUnitTest --no-daemon --no-watch-fs
+```
+
+**判据**：输出里出现 `?` 就说明编码没生效 —— 先怀疑编码，不要怀疑业务逻辑。
+
+### 坑 7：并发补数据丢更新（静默 bug）
+
+**现象**：并发给 N 个分类补图片张数，部分分类一直停在 0 或旧值。所有请求都 200，日志无异常。
+
+**根因**：并发体里对共享字段做「读-改-写」：
+
+```kotlin
+cachedCategories = cachedCategories.map { /* 只改自己那一个 */ }
+```
+
+两个协程各自读到同一份旧列表、各自写回自己那份，后写的覆盖先写的。赋值本身原子，但读与写之间的窗口没人管。
+
+**做法**：拆成两段 —— 探测阶段并发且**只读**（`probeCategoryCount()`），全部结果回来后**单点写**（`replaceCategories()` 一次性合并）。并补一条「按请求内容路由的假传输 + 并发数 4」的回归用例，断言每个分类都到位。
+
+**判据**：并发体里出现对共享状态的写，先问「这个读-改-写会不会被另一个协程夹在中间」；能用「收集后合并」的就不要边算边写。
+
 ## 五、验收（四条，缺一不可）
 
 ```bash
