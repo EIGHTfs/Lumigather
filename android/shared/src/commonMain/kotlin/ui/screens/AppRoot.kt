@@ -37,10 +37,13 @@ import com.tencent.kuikly.compose.ui.graphics.Brush
 import com.tencent.kuikly.compose.ui.graphics.graphicsLayer
 import com.tencent.kuikly.compose.ui.input.pointer.pointerInput
 import com.tencent.kuikly.core.annotations.Page
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import theme.AppTheme
 import theme.LumigatherTheme
 import theme.ThemeMode
+import ui.screens.download.ImageDownloader
+import ui.screens.download.createImageDownloader
 import ui.screens.main.HomeScreen
 import ui.screens.settings.ServerAddressStore
 import ui.screens.settings.ServerSettingsScreen
@@ -66,16 +69,19 @@ expect fun createDefaultHttpTransport(): HttpTransport
 /**
  * 根组合：状态在设置态就画设置界面，否则画三栏骨架。
  *
- * @param clientFactory 按地址造 ApiClient。改地址后需要换掉整个 ApiClient，所以传工厂而不是实例
- * @param addressStore  地址持久化入口（真机上是 SharedPreferences）
+ * @param clientFactory   按地址造 ApiClient。改地址后需要换掉整个 ApiClient，所以传工厂而不是实例
+ * @param addressStore    地址持久化入口（真机上是 SharedPreferences）
+ * @param imageDownloader 存相册能力（真机上是 MediaStore 实现）。注入而不是页面自己 new，
+ *                        是为了让"下载成功/失败"能在状态层被测到，不必真的往相册写文件
  */
 @Composable
 fun AppRoot(
     clientFactory: (String) -> ApiClient,
     addressStore: ServerAddressStore,
+    imageDownloader: ImageDownloader,
     modifier: Modifier = Modifier,
-    stateHolder: HomeStateHolder = remember(clientFactory, addressStore) {
-        HomeStateHolder(clientFactory, addressStore)
+    stateHolder: HomeStateHolder = remember(clientFactory, addressStore, imageDownloader) {
+        HomeStateHolder(clientFactory, addressStore, imageDownloader)
     },
 ) {
     val scope = rememberCoroutineScope()
@@ -100,7 +106,15 @@ fun AppRoot(
         return
     }
 
-    MainScaffold(state = state, stateHolder = stateHolder, modifier = modifier)
+    // 下载用 AppRoot 自己的作用域而不是 MainScaffold 的：下载是一次有副作用的写文件动作，
+    // 半路被取消会留下未完成的相册条目。而 MainScaffold 会随"进设置界面"被移出组合，
+    // 用它自己的作用域就等于把"用户点开设置"变成"取消下载"。
+    MainScaffold(
+        state = state,
+        stateHolder = stateHolder,
+        downloadScope = scope,
+        modifier = modifier,
+    )
 }
 
 /**
@@ -127,6 +141,7 @@ private fun registerBackHandling(state: HomeUiState, stateHolder: HomeStateHolde
 private fun MainScaffold(
     state: HomeUiState,
     stateHolder: HomeStateHolder,
+    downloadScope: CoroutineScope,
     modifier: Modifier = Modifier,
 ) {
     val colors = AppTheme.colors
@@ -266,6 +281,8 @@ private fun MainScaffold(
         if (rightProgress > 0f) {
             RightSidebar(
                 state = state,
+                onDownload = { downloadScope.launch { stateHolder.downloadSelectedImage() } },
+                onFavorite = stateHolder::requestFavorite,
                 onClose = stateHolder::closeSidebars,
                 modifier = Modifier
                     .align(Alignment.CenterEnd)
@@ -297,6 +314,8 @@ class LumigatherHomePage : ComposeContainer() {
             // 改地址时只换 ApiClient，不重建传输层。
             val transport = remember { createDefaultHttpTransport() }
             val addressStore = remember { createServerAddressStore() }
+            // 相册下载器同样只需一份：它内部持有自己的线程池与查重逻辑
+            val imageDownloader = remember { createImageDownloader() }
             // 工厂必须 remember：lambda 每次重组都是新对象，会让 stateHolder 跟着重建、
             // bootstrap 反复重跑（表现是首屏反复转圈）。
             val clientFactory: (String) -> ApiClient = remember(transport) {
@@ -304,7 +323,11 @@ class LumigatherHomePage : ComposeContainer() {
             }
 
             LumigatherTheme(mode = ThemeMode.Light) {
-                AppRoot(clientFactory = clientFactory, addressStore = addressStore)
+                AppRoot(
+                    clientFactory = clientFactory,
+                    addressStore = addressStore,
+                    imageDownloader = imageDownloader,
+                )
             }
         }
     }

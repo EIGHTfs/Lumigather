@@ -107,7 +107,21 @@ class ServerAddressRulesTest {
 class HomeStateHolderTest {
 
     private fun holderWith(store: ServerAddressStore, transport: HttpTransport): HomeStateHolder =
-        HomeStateHolder(clientFactory = { address -> ApiClient(address, transport) }, addressStore = store)
+        HomeStateHolder(
+            clientFactory = { address -> ApiClient(address, transport) },
+            addressStore = store,
+            // 设置链路不涉及下载，给一个"永不成功"的假实现即可（真被调用说明有 bug）
+            imageDownloader = object : ui.screens.download.ImageDownloader {
+                override suspend fun saveToGallery(
+                    imageUrl: String,
+                    fileName: String,
+                ): ui.screens.download.DownloadResult =
+                    ui.screens.download.DownloadResult.Failure(
+                        ui.screens.download.DownloadFailureKind.Unknown,
+                        "测试里不应该走到下载",
+                    )
+            },
+        )
 
     @Test
     fun firstLaunchWithoutAddressEntersSettings() = runBlocking {

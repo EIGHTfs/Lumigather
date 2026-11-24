@@ -8,7 +8,9 @@
 
 package ui.screens.settings
 
+import android.app.Activity
 import android.content.Context
+import java.lang.ref.WeakReference
 
 // 配置文件与键名。改这两个字符串等于让已安装用户的地址失效，改动前必须想清楚迁移。
 private const val PREFERENCES_NAME = "lumigather_settings_v1"
@@ -18,19 +20,31 @@ private const val KEY_SERVER_ADDRESS = "server_base_url"
  * 宿主上下文持有者。
  *
  * 为什么需要它：页面由 Kuikly 按 pageName 创建，构造期拿不到 Android Context；
- * 而 SharedPreferences 必须要一个 Context。宿主（MainActivity）在 onCreate 里装一次即可。
+ * 而 SharedPreferences、MediaStore、运行时权限申请都必须有 Context/Activity。
+ * 宿主（MainActivity）在 onCreate 里装一次即可。
  *
- * 装不上时的降级：返回 null，store 退化成"内存存储 + 未配置"，
- * 结果是用户会看到设置界面（而不是崩溃）。这是有意的：配置系统出错不该让 App 起不来。
+ * 同时保存两份引用是有原因的：
+ * - applicationContext 长期持有（不会泄漏），给 prefs/ContentResolver 这类不需要界面上下文的调用；
+ * - Activity 只留弱引用：运行时权限必须由 Activity 发起，但强引用会让旋转/重建后的旧 Activity
+ *   一直回收不掉。弱引用被回收时宁可在功能上降级（提示"未就绪"），也不泄漏整个界面。
+ *
+ * 装不上时的降级：返回 null，各功能退化成"未配置/未就绪"而不是崩溃。
  */
 object AndroidHostContext {
     private var applicationContext: Context? = null
+    private var activityReference: WeakReference<Activity>? = null
 
     fun install(context: Context) {
         applicationContext = context.applicationContext
+        if (context is Activity) {
+            activityReference = WeakReference(context)
+        }
     }
 
     internal fun current(): Context? = applicationContext
+
+    // 运行时权限申请需要它；拿不到时调用方应给出"未就绪"提示而不是抛异常
+    fun currentActivity(): Activity? = activityReference?.get()
 }
 
 private class SharedPreferencesServerAddressStore(

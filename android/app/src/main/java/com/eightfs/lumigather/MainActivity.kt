@@ -18,6 +18,7 @@ import com.tencent.kuikly.core.render.android.adapter.KuiklyRenderAdapterManager
 import com.tencent.kuikly.core.render.android.expand.KuiklyRenderViewBaseDelegator
 import com.tencent.kuikly.core.render.android.expand.KuiklyRenderViewBaseDelegatorDelegate
 import ui.screens.HOME_PAGE_NAME
+import ui.screens.download.AndroidPermissionBridge
 import ui.screens.settings.AndroidHostContext
 
 // JVM 执行模式下 contextCode 传空串（Kuikly 官方的约定：代码在本地 Kotlin 侧，不动态下发）。
@@ -79,6 +80,21 @@ class MainActivity : AppCompatActivity() {
             @Suppress("DEPRECATION")
             super.onBackPressed()
         }
+    }
+
+    /**
+     * 权限结果转发：下载功能在 API 28 及以下需要 WRITE_EXTERNAL_STORAGE。
+     *
+     * 页面侧的申请是 suspend 的（见 AndroidPermissionBridge），结果必须经 Activity 回传；
+     * 桥先认领自己的请求码，认领了就不再往上报，避免与将来别的权限申请互相干扰。
+     */
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray,
+    ) {
+        if (AndroidPermissionBridge.onRequestPermissionsResult(requestCode, grantResults)) return
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
     }
 
     /**

@@ -137,14 +137,18 @@ private fun InfoLine(icon: String, label: String, value: String) {
     Spacer(modifier = Modifier.height(metrics.spacingXs))
 }
 
-/** 操作页签：没有回调就明确说「没有可用操作」，而不是留一片空白让人猜。 */
+/** 操作页签：没有回调时引导到下方动作条，而不是留一句"没有可用操作"让人以为功能坏了。 */
 @Composable
 private fun ActionsSection(onDownload: (() -> Unit)?, onShare: (() -> Unit)?) {
     val colors = AppTheme.colors
     val metrics = AppTheme.metrics
 
     if (onDownload == null && onShare == null) {
-        Text(text = "没有可用操作", color = colors.textFaint, fontSize = metrics.fontCaption)
+        Text(
+            text = "这张图的操作用下方动作条：下载可存到相册，收藏需要先登录",
+            color = colors.textFaint,
+            fontSize = metrics.fontCaption,
+        )
         return
     }
 

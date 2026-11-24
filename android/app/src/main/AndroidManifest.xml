@@ -5,6 +5,14 @@
     <!-- 业务数据全部来自自建服务端（Http），且允许用户填任意局域网地址，故不限制明文流量 -->
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- 下载图片到相册：Android 10（API 29）起是 Scoped Storage，写自己的相册条目免权限；
+         7.0–9（API 24–28）仍需 WRITE_EXTERNAL_STORAGE。
+         maxSdkVersion=28 把它限定在真正需要它的版本上：29+ 申请这个权限系统会直接判为已授予/忽略，
+         留着只会让权限面板多一条无效项。 -->
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+
     <application
         android:allowBackup="true"
         android:label="@string/app_name"

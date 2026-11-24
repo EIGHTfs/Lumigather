@@ -19,6 +19,9 @@ import com.eightfs.lumigather.data.DEFAULT_PAGE_SIZE
 import com.eightfs.lumigather.data.ImageItem
 import com.eightfs.lumigather.data.LumigatherRepository
 import com.eightfs.lumigather.data.PagedImages
+import kotlin.coroutines.cancellation.CancellationException
+import ui.screens.download.DownloadResult
+import ui.screens.download.ImageDownloader
 import ui.screens.settings.ServerAddressRules
 import ui.screens.settings.ServerAddressStore
 
@@ -28,6 +31,19 @@ sealed class ConnectionTestState {
     data object Testing : ConnectionTestState()
     data class Success(val version: String) : ConnectionTestState()
     data class Failure(val message: String) : ConnectionTestState()
+}
+
+/**
+ * 下载到相册的四种状态。
+ *
+ * 为什么成功也要带 message：三种"成功"对用户的意义不同 —— 新存了一份、相册里本来就有、
+ * 刚被系统拦下来一次又重试成功。只显示一个对勾会让用户搞不清相册里到底有几份。
+ */
+sealed class DownloadUiState {
+    data object Idle : DownloadUiState()
+    data object Downloading : DownloadUiState()
+    data class Done(val message: String) : DownloadUiState()
+    data class Failed(val message: String) : DownloadUiState()
 }
 
 /**
@@ -68,6 +84,12 @@ data class HomeUiState(
     val testState: ConnectionTestState = ConnectionTestState.Idle,
     // 是否已有可用配置。决定设置界面要不要给"返回"入口 —— 没配过就没有可返回的地方。
     val hasSavedAddress: Boolean = false,
+    // ---- 详情栏动作 ----
+    // 下载到相册的进度/结果
+    val downloadState: DownloadUiState = DownloadUiState.Idle,
+    // 占位功能（收藏）的提示。与 downloadState 分开：收藏按设计就是不落地的，
+    // 把它混进下载状态会让"下载失败"和"需要登录"共用一条通道，将来接入登录时更难拆。
+    val actionHint: String? = null,
 ) {
     // 左侧栏的可见分类：搜索框有内容时按展示名过滤，空查询不过滤。
     val visibleCategories: List<CategoryView>
@@ -106,6 +128,7 @@ data class HomeUiState(
 class HomeStateHolder(
     private val clientFactory: (String) -> ApiClient,
     private val addressStore: ServerAddressStore,
+    private val imageDownloader: ImageDownloader,
 ) {
 
     private val mutableState = mutableStateOf(HomeUiState())
@@ -295,7 +318,62 @@ class HomeStateHolder(
     }
 
     fun openDetail(image: ImageItem) {
-        mutate { it.copy(rightSidebarOpen = true, selectedImage = image, leftSidebarOpen = false) }
+        mutate {
+            it.copy(
+                rightSidebarOpen = true,
+                selectedImage = image,
+                leftSidebarOpen = false,
+                // 换图就清掉上一张的下载结果与提示，否则用户会以为新图"已保存到相册"
+                downloadState = DownloadUiState.Idle,
+                actionHint = null,
+            )
+        }
+    }
+
+    /**
+     * 下载当前详情图到系统相册。
+     *
+     * 防重复：一开始就把状态切成 Downloading，第二次调用在入口处直接返回。
+     * 因为状态是同步写入的（在第一个挂起点之前），连点两下也只有一次会真正跑下去。
+     *
+     * 失败不弹窗、不崩：分类里的三种失败原因各有中文提示，直接显示在动作条上方。
+     */
+    suspend fun downloadSelectedImage() {
+        val image = state.selectedImage ?: return
+        if (state.downloadState is DownloadUiState.Downloading) return
+
+        mutate { it.copy(downloadState = DownloadUiState.Downloading, actionHint = null) }
+
+        // 结果一次性算成一个新状态再写回：中间不暴露"Downloading 已被清掉但结果还没写"的空档，
+        // 否则按钮会在半路恢复可点。
+        //
+        // 外层兜一层 catch 是防御性的：接口约定"实现不抛异常"，但平台实现可能有漏网的异常类型，
+        // 一旦抛出来没有兜底，状态就会永久停在"保存中…"、按钮永久禁用 —— 那是最难受的一种坏。
+        val nextState = try {
+            when (val result = imageDownloader.saveToGallery(image.absoluteUrl, image.name)) {
+                is DownloadResult.Success -> DownloadUiState.Done("已保存到相册")
+                is DownloadResult.AlreadySaved -> DownloadUiState.Done("相册里已有这张图，未重复保存")
+                is DownloadResult.Failure -> DownloadUiState.Failed(result.message)
+            }
+        } catch (cancelled: CancellationException) {
+            // 协程被取消（页面销毁等）：先把状态复位，再把取消原样抛出 ——
+            // 吞掉取消会让上层的结构化并发逻辑失效。
+            mutate { it.copy(downloadState = DownloadUiState.Idle) }
+            throw cancelled
+        } catch (failure: Throwable) {
+            DownloadUiState.Failed("保存失败：${failure.message ?: "未知错误"}")
+        }
+        mutate { it.copy(downloadState = nextState) }
+    }
+
+    /**
+     * 收藏：本轮只做占位提示，**不做任何状态切换**。
+     *
+     * 为什么宁可"点了没反应式地提示"也不做假的已收藏态：假状态会让用户以为存到了服务端，
+     * 等真正接登录时才发现以前的收藏一个都没有 —— 那比现在直接告诉他"还没开放"糟糕得多。
+     */
+    fun requestFavorite() {
+        mutate { it.copy(actionHint = "收藏需要先登录，该功能即将开放") }
     }
 
     fun closeSidebars() {

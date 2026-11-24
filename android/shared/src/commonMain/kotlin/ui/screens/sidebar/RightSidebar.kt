@@ -34,13 +34,17 @@ import ui.blocks.DetailInfoBlock
 import ui.components.AppEmpty
 import ui.components.AppIconButton
 import ui.components.AppPillButton
+import ui.components.PillSize
 import ui.components.PillVariant
 import ui.screens.HomeLayout
+import ui.screens.state.DownloadUiState
 import ui.screens.state.HomeUiState
 
 @Composable
 fun RightSidebar(
     state: HomeUiState,
+    onDownload: () -> Unit,
+    onFavorite: () -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -89,6 +93,9 @@ fun RightSidebar(
                 DetailInfoBlock(
                     image = image,
                     categoryName = state.selectedCategoryView?.label.orEmpty(),
+                    // 详情区的「操作」页签也接真实下载：两个入口共用页面层的同一个动作，
+                    // 不各自实现一遍（否则一个存进相册、一个只是提示，用户会被搞糊涂）。
+                    onDownload = onDownload,
                 )
             }
             item {
@@ -96,7 +103,14 @@ fun RightSidebar(
             }
         }
 
-        BottomActionBar(onClose = onClose)
+        ActionStatusLine(state = state)
+
+        BottomActionBar(
+            isDownloading = state.downloadState is DownloadUiState.Downloading,
+            onDownload = onDownload,
+            onFavorite = onFavorite,
+            onClose = onClose,
+        )
     }
 }
 
@@ -160,23 +174,78 @@ private fun FileNameLine(name: String) {
     )
 }
 
-// 底部操作条：目前只有"关闭"是真实可用的动作。
-// 下载/分享还没有后端契约（下载要落手机相册、分享要经系统面板），故不摆假按钮——
-// 详情区的「操作」页签会明确显示"没有可用操作"，比点不动更有用。
+/**
+ * 动作结果提示：下载进度/结果，或占位功能（收藏）的说明。
+ *
+ * 一行就够，不做 Toast 也不做弹窗：这类结果用户看完就走，弹窗还得再点一次关闭；
+ * 而失败原因（网络/权限/存储）必须留在屏幕上，用户才有机会照着去处理。
+ */
 @Composable
-private fun BottomActionBar(onClose: () -> Unit) {
+private fun ActionStatusLine(state: HomeUiState) {
+    val colors = AppTheme.colors
+    val metrics = AppTheme.metrics
+
+    val message = when (val downloadState = state.downloadState) {
+        DownloadUiState.Idle -> state.actionHint
+        DownloadUiState.Downloading -> "正在保存到相册…"
+        is DownloadUiState.Done -> downloadState.message
+        is DownloadUiState.Failed -> downloadState.message
+    }
+    if (message.isNullOrBlank()) return
+
+    // 进行中用更弱的字色，把注意力留给图片本身；结果用次要色，保证能读到
+    val color = if (state.downloadState is DownloadUiState.Downloading) colors.textFaint else colors.textSecondary
+    Text(
+        text = message,
+        color = color,
+        fontSize = metrics.fontMicro,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = metrics.spacingXs),
+    )
+}
+
+/**
+ * 底部动作条：下载（真功能）/ 收藏（占位）/ 关闭。
+ *
+ * 三个都用 Compact 尺寸挤在一行：栏宽只有 286dp，常规尺寸放三个会换行，
+ * 换行后按钮离图片更远、更难点。
+ *
+ * 下载中把按钮文案改成"保存中…"并禁用：这是防重复点击的第一道闸，
+ * 与状态层的"下载中直接返回"是两道独立的闸（按钮被绕过时状态层仍能挡住）。
+ */
+@Composable
+private fun BottomActionBar(
+    isDownloading: Boolean,
+    onDownload: () -> Unit,
+    onFavorite: () -> Unit,
+    onClose: () -> Unit,
+) {
     val metrics = AppTheme.metrics
 
     Row(
         modifier = Modifier.fillMaxWidth().padding(horizontal = metrics.spacingXs),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(metrics.spacingSm),
+        horizontalArrangement = Arrangement.spacedBy(metrics.spacingXs),
     ) {
+        AppPillButton(
+            text = if (isDownloading) "保存中…" else "下载",
+            onClick = onDownload,
+            modifier = Modifier.weight(1f),
+            size = PillSize.Compact,
+            enabled = !isDownloading,
+        )
+        AppPillButton(
+            text = "收藏",
+            onClick = onFavorite,
+            modifier = Modifier.weight(1f),
+            variant = PillVariant.Secondary,
+            size = PillSize.Compact,
+        )
         AppPillButton(
             text = "关闭",
             onClick = onClose,
             modifier = Modifier.weight(1f),
-            variant = PillVariant.Secondary,
+            variant = PillVariant.Ghost,
+            size = PillSize.Compact,
         )
     }
 }
