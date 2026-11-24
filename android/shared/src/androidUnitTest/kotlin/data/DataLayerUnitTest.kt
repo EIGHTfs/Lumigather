@@ -250,8 +250,8 @@ class ApiClientTest {
     @Test
     fun degradedImagesResponseParsesAsEmptyPage() = runBlocking {
         // 实测降级体：缺 root/total/offset/limit/returned/recursive。
-        val transport = okJson("""{"path":"/volume6/__nope__","count":0,"images":[]}""")
-        val result = ApiClient("http://h:8081", transport).fetchImages(root = "/volume6/__nope__")
+        val transport = okJson("""{"path":"test-root/__nope__","count":0,"images":[]}""")
+        val result = ApiClient("http://h:8081", transport).fetchImages(root = "test-root/__nope__")
         val page = (result as ApiResult.Ok).value
         assertEquals(0, page.returned)
         assertEquals(0, page.images.size)
@@ -277,10 +277,10 @@ class RepositoryTest {
 
     // 一份贴合真实结构的站点配置：两个分类，其中一个在 directories 里没有路径（脏数据）。
     private val siteConfigJson = """
-        {"title":"拾光集","fsRoot":"/root/fallback","imagesPerRow":20,
+        {"title":"拾光集","fsRoot":"test-root/fallback","imagesPerRow":20,
          "categories":[{"name":"崩坏3","label":"崩坏3","color":"#c084fc"},
                        {"name":"原神","label":"原神","color":"#4ade80"}],
-         "directories":[{"path":"/root/honkai","category":"崩坏3"}]}
+         "directories":[{"path":"test-root/honkai","category":"崩坏3"}]}
     """.trimIndent()
 
     @Test
@@ -289,7 +289,7 @@ class RepositoryTest {
         val views = (repository.loadCategories() as ApiResult.Ok).value
         assertEquals(2, views.size)
         // 契约字段：name / color / rootPath / imageCount 必须齐。
-        assertEquals("/root/honkai", views[0].rootPath)
+        assertEquals("test-root/honkai", views[0].rootPath)
         assertEquals("#c084fc", views[0].color)
         assertEquals(0, views[0].imageCount)
         assertEquals(CountState.UNKNOWN, views[0].countState)
@@ -301,7 +301,7 @@ class RepositoryTest {
         val repository = LumigatherRepository(ApiClient("http://h:8081", okJson(siteConfigJson)))
         val views = (repository.loadCategories() as ApiResult.Ok).value
         // 没配路径的分类回落全局根，但必须打上标记 —— 否则用户会以为两个分类是同一种图库。
-        assertEquals("/root/fallback", views[1].rootPath)
+        assertEquals("test-root/fallback", views[1].rootPath)
         assertTrue(views[1].rootIsFallback)
     }
 
@@ -318,7 +318,7 @@ class RepositoryTest {
         assertEquals(72651, updated.imageCount)
         assertEquals(CountState.READY, updated.countState)
         // 探针请求必须带该分类自己的 root，且 limit=1 只读 total。
-        assertEquals("/root/honkai", transport.lastQuery["root"])
+        assertEquals("test-root/honkai", transport.lastQuery["root"])
         assertEquals("1", transport.lastQuery["limit"])
         // 仓库缓存里的同名分类也要同步更新，供 UI 直接读。
         assertEquals(72651, repository.findCategory("崩坏3")?.imageCount)
@@ -327,14 +327,14 @@ class RepositoryTest {
     @Test
     fun loadPageFillsAbsoluteUrl() = runBlocking {
         val pageJson = """
-            {"path":"/root/honkai","root":"/root/honkai","recursive":true,"count":1,"total":1,
+            {"path":"test-root/honkai","root":"test-root/honkai","recursive":true,"count":1,"total":1,
              "offset":0,"limit":20,"returned":1,
-             "images":[{"name":"a.png","path":"/root/honkai/a.png",
+             "images":[{"name":"a.png","path":"test-root/honkai/a.png",
                         "url":"/api/media?file=%2Froot%2Fhonkai%2Fa.png",
                         "size":"139.4 KB","modified":"2023-08-18T06:56:03.097Z"}]}
         """.trimIndent()
         val repository = LumigatherRepository(ApiClient("http://h:8081", okJson(pageJson)))
-        val page = (repository.loadPage("/root/honkai", offset = 0) as ApiResult.Ok).value
+        val page = (repository.loadPage("test-root/honkai", offset = 0) as ApiResult.Ok).value
         val image = page.images.single()
         // UI 拿到的必须是可直接加载的绝对地址，且不能是双重编码。
         assertEquals("http://h:8081/api/media?file=%2Froot%2Fhonkai%2Fa.png", image.absoluteUrl)
@@ -355,17 +355,17 @@ class RepositoryTest {
     fun refreshCategoryCountsKeepsEveryCategoryWhenRunConcurrently() = runBlocking {
         // 回归用例：并发补张数时，如果每个协程各自「读缓存 → 改 → 写回」，
         // 后写的会覆盖先写的，部分分类张数停留在 0。这条断言就是钉住那个丢更新。
-        val countByRoot = mapOf("/root/c1" to 11, "/root/c2" to 22, "/root/c3" to 33, "/root/c4" to 44)
+        val countByRoot = mapOf("test-root/c1" to 11, "test-root/c2" to 22, "test-root/c3" to 33, "test-root/c4" to 44)
         val config = """
-            {"title":"t","fsRoot":"/root/fallback","imagesPerRow":20,
+            {"title":"t","fsRoot":"test-root/fallback","imagesPerRow":20,
              "categories":[{"name":"c1","label":"c1","color":"#111"},
                            {"name":"c2","label":"c2","color":"#222"},
                            {"name":"c3","label":"c3","color":"#333"},
                            {"name":"c4","label":"c4","color":"#444"}],
-             "directories":[{"path":"/root/c1","category":"c1"},
-                            {"path":"/root/c2","category":"c2"},
-                            {"path":"/root/c3","category":"c3"},
-                            {"path":"/root/c4","category":"c4"}]}
+             "directories":[{"path":"test-root/c1","category":"c1"},
+                            {"path":"test-root/c2","category":"c2"},
+                            {"path":"test-root/c3","category":"c3"},
+                            {"path":"test-root/c4","category":"c4"}]}
         """.trimIndent()
 
         // 按 root 路由而不是按调用顺序：并发下响应顺序不确定，顺序化假传输会串数据。

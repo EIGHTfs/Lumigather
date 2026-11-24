@@ -74,6 +74,21 @@ class LumigatherRepository(private val api: ApiClient) {
 
     suspend fun logout(token: String): ApiResult<Unit> = api.logout(token)
 
+    // 收藏与游客上传：仓库只做转发 + 地址解析，收藏的"该不该存"判断在状态层。
+    suspend fun loadFavorites(): ApiResult<List<FavoriteEntry>> = api.fetchFavorites()
+
+    suspend fun addFavorite(request: FavoriteRequest, token: String): ApiResult<FavoriteMutation> =
+        api.addFavorite(request, token)
+
+    suspend fun removeFavorite(src: String, token: String): ApiResult<List<FavoriteEntry>> =
+        api.removeFavorite(src, token)
+
+    suspend fun loadUploaded(): ApiResult<List<UploadedEntry>> = api.fetchUploaded()
+
+    // 把相对媒体地址拼成绝对地址。收藏条目只有相对 src，而网格/详情栏要的是可直接加载的绝对地址 ——
+    // 拼接规则（baseUrl 归一化、子路径前缀、不二次编码）只在 ApiClient 里有一份，这里只是暴露出来。
+    fun resolveMediaUrl(relativeOrAbsolute: String): String = api.resolveUrl(relativeOrAbsolute)
+
     /**
      * 拉分类列表（含每个分类的绝对路径），不含张数。
      *

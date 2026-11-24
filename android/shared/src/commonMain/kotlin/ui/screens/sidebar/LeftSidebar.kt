@@ -16,6 +16,7 @@ import com.tencent.kuikly.compose.foundation.layout.Row
 import com.tencent.kuikly.compose.foundation.layout.Spacer
 import com.tencent.kuikly.compose.foundation.layout.fillMaxSize
 import com.tencent.kuikly.compose.foundation.layout.fillMaxWidth
+import com.tencent.kuikly.compose.foundation.layout.height
 import com.tencent.kuikly.compose.foundation.layout.padding
 import com.tencent.kuikly.compose.foundation.layout.size
 import com.tencent.kuikly.compose.foundation.layout.width
@@ -30,18 +31,22 @@ import com.tencent.kuikly.compose.ui.geometry.Offset
 import com.tencent.kuikly.compose.ui.graphics.SolidColor
 import com.tencent.kuikly.compose.ui.graphics.drawscope.Stroke
 import com.tencent.kuikly.compose.ui.text.TextStyle
+import com.tencent.kuikly.compose.ui.text.style.TextAlign
 import com.tencent.kuikly.compose.ui.unit.dp
 import theme.AppTheme
 import ui.blocks.CategoryBlock
 import ui.components.AppEmpty
 import ui.components.AppIconButton
+import ui.components.AppListRow
 import ui.screens.HomeLayout
 import ui.screens.state.HomeUiState
+import ui.screens.state.HomeView
 
 @Composable
 fun LeftSidebar(
     state: HomeUiState,
     onSelectCategory: (String) -> Unit,
+    onSelectView: (HomeView) -> Unit,
     onQueryChange: (String) -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
@@ -71,6 +76,8 @@ fun LeftSidebar(
             onClose = onClose,
         )
         SearchField(query = state.searchQuery, onQueryChange = onQueryChange)
+        // 两个虚拟视图放在分类分区之上：它们是"另一套数据源"，不是某个分类，位置也要在视觉上先于分类
+        VirtualViewRows(state = state, onSelectView = onSelectView)
         SectionTitle(
             text = sectionTitle(
                 totalCategoryCount = state.categories.size,
@@ -251,11 +258,98 @@ private fun CategoryList(
                 label = category.label.ifBlank { category.name },
                 color = category.color,
                 imageCount = category.imageCount,
-                selected = category.name == state.selectedCategory,
+                // 只有分类视图下分类才算选中：收藏/游客被选中时，全部分类行自动变回未选中，
+                // 互斥不靠"切视图时记得清 selectedCategory"，而是靠这里的一次判断
+                selected = state.view == HomeView.All && category.name == state.selectedCategory,
                 countState = category.countState,
                 onClick = { onSelectCategory(category.name) },
             )
         }
+    }
+}
+
+/**
+ * 两个虚拟视图入口：收藏 / 游客上传。
+ *
+ * 它们不是"分类"，而是"另一套数据源"，所以放在分类分区之上、独立成块；
+ * 选中态复用分类行同一套视觉（淡主色底 + 尾部胶囊变主色），三个视图和分类列表看起来是一家人。
+ *
+ * 数量直接用已加载列表的条数：它来自服务端列表本身，不会出现"数字说有 12 张、点进去是空的"。
+ */
+@Composable
+private fun VirtualViewRows(state: HomeUiState, onSelectView: (HomeView) -> Unit) {
+    val metrics = AppTheme.metrics
+
+    Column(verticalArrangement = Arrangement.spacedBy(metrics.spacingSm)) {
+        VirtualViewRow(
+            glyph = GLYPH_FAVORITE,
+            title = "收藏",
+            count = state.favoriteImages.size,
+            selected = state.view == HomeView.Favorites,
+            onClick = { onSelectView(HomeView.Favorites) },
+        )
+        VirtualViewRow(
+            glyph = GLYPH_GUEST,
+            title = "游客",
+            count = state.guestImages.size,
+            selected = state.view == HomeView.Guest,
+            onClick = { onSelectView(HomeView.Guest) },
+        )
+    }
+}
+
+// 一行虚拟视图：字形 + 名称 + 数量胶囊。与分类行同构，只是没有色标。
+@Composable
+private fun VirtualViewRow(
+    glyph: String,
+    title: String,
+    count: Int,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    val colors = AppTheme.colors
+    val metrics = AppTheme.metrics
+
+    AppListRow(
+        title = title,
+        selected = selected,
+        // 选中信号交给尾部胶囊变主色（与分类行一致），不再额外挂圆点
+        showSelectionDot = false,
+        onClick = onClick,
+        leading = {
+            // 字形图标而不是图片资源：本项目不引图标库，分类行也是同一种线性风格
+            Text(text = glyph, color = colors.textSecondary, fontSize = metrics.fontSubtitle)
+        },
+        trailing = { CountPill(count = count, highlighted = selected) },
+    )
+}
+
+/**
+ * 数量胶囊：与分类行的张数胶囊同款（宽高、圆角、字号都取同一批度量）。
+ *
+ * 为什么这里复制一份而不是复用 ui/blocks 里的 CountBadge：那个是 CategoryBlock 的文件私有实现，
+ * 本轮刻意不动 ui/blocks。等两处都要改时应该把它提到 ui/components 去共用。
+ */
+@Composable
+private fun CountPill(count: Int, highlighted: Boolean) {
+    val colors = AppTheme.colors
+    val metrics = AppTheme.metrics
+
+    Box(
+        modifier = Modifier
+            .width(metrics.widthCountBadge)
+            .height(metrics.heightCountBadge)
+            .clip(RoundedCornerShape(metrics.radiusPill))
+            .background(if (highlighted) colors.primary else colors.container),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = count.toString(),
+            color = if (highlighted) colors.onPrimary else colors.textSecondary,
+            fontSize = metrics.fontCaption,
+            maxLines = 1,
+            textAlign = TextAlign.Center,
+        )
     }
 }
 
@@ -306,3 +400,8 @@ private const val LENS_RADIUS_RATIO = 0.30f
 private const val LENS_CENTER_RATIO = 0.40f
 private const val DIAGONAL_UNIT = 0.707f
 private const val HANDLE_END_RATIO = 0.94f
+
+// 虚拟视图的字形图标。放文件内常量而不是 HomeLayout：它们是左栏专有，
+// 且 HomeLayout 本轮不在改动范围内（避免为两个字形去动共享布局常量）。
+private const val GLYPH_FAVORITE = "♥"
+private const val GLYPH_GUEST = "☁"

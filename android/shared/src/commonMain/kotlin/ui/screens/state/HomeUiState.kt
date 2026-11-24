@@ -16,6 +16,7 @@ import com.eightfs.lumigather.data.AuthTokenStore
 import com.eightfs.lumigather.data.CategoryView
 import com.eightfs.lumigather.data.ImageItem
 import com.eightfs.lumigather.data.LumigatherRepository
+import com.eightfs.lumigather.data.MediaSrc
 import com.eightfs.lumigather.data.currentEpochMillis
 import ui.screens.download.ImageDownloader
 import ui.screens.settings.ServerAddressStore
@@ -65,6 +66,14 @@ data class AuthUiState(
     val expiresAtEpochMs: Long = 0L,
     val noPassword: Boolean = false,
 )
+
+/**
+ * 网格当前展示哪一套数据。
+ *
+ * 用一个枚举而不是三个布尔：互斥这件事由类型本身保证 —— 「收藏被选中时分类必须不选中」
+ * 不需要任何清理代码，页面判断 selected 时写 `view == All && ...` 就永远不会两处同时亮。
+ */
+enum class HomeView { All, Favorites, Guest }
 
 /**
  * 整屏的完整状态。任何时刻界面都是它的一个纯函数。
@@ -119,6 +128,17 @@ data class HomeUiState(
     val loginState: LoginUiState = LoginUiState.Idle,
     // 失败后的冷却期（后端没有失败限流，前端用这个挡住连点）
     val loginBlocked: Boolean = false,
+    // ---- 收藏 / 游客视图 ----
+    // 网格当前展示哪一套数据（三视图互斥由枚举保证）
+    val view: HomeView = HomeView.All,
+    val favoriteImages: List<ImageItem> = emptyList(),
+    // 收藏条目的规范化 src 集合：判断"当前这张图收没收藏"用它（O(1)，且不依赖列表顺序）
+    val favoriteSrcs: Set<String> = emptySet(),
+    val guestImages: List<ImageItem> = emptyList(),
+    val favoritesLoading: Boolean = false,
+    val guestLoading: Boolean = false,
+    // 正在添加/移除的那条 src（非空 = 操作中 → 按钮禁用，防连点）
+    val favoriteActionSrc: String = "",
 ) {
     // 左侧栏的可见分类：搜索框有内容时按展示名过滤，空查询不过滤。
     val visibleCategories: List<CategoryView>
@@ -135,13 +155,67 @@ data class HomeUiState(
     val statusText: String
         get() = if (online) "在线" else "离线"
 
-    // 顶栏副标题：分类名 + 已加载/总数，让用户知道"还有多少没加载"。
+    // 顶栏副标题：随视图切换 —— 分类视图给"分类名 · 已加载/总数"，收藏/游客给"名称 · 条数"
     val contentSubtitle: String
+        get() = when (view) {
+            HomeView.All -> {
+                val categoryName = selectedCategoryView?.label.orEmpty()
+                when {
+                    categoryName.isEmpty() -> "正在读取分类"
+                    totalCount <= 0 -> categoryName
+                    else -> "$categoryName · ${loadedCount}/${totalCount}"
+                }
+            }
+
+            HomeView.Favorites -> "收藏 · ${favoriteImages.size}"
+            HomeView.Guest -> "游客 · ${guestImages.size}"
+        }
+
+    // ---- 三视图的唯一出口：页面只读这几个派生值，不再自己判断 view ----
+
+    // 网格数据：分类图 / 收藏 / 游客上传
+    val gridImages: List<ImageItem>
+        get() = when (view) {
+            HomeView.All -> images
+            HomeView.Favorites -> favoriteImages
+            HomeView.Guest -> guestImages
+        }
+
+    val gridLoading: Boolean
+        get() = when (view) {
+            HomeView.All -> isLoadingPage
+            HomeView.Favorites -> favoritesLoading
+            HomeView.Guest -> guestLoading
+        }
+
+    // 空态文案：三套数据"为什么没有"的原因不同，用同一句会让人以为收藏坏了
+    val gridEmptyTitle: String
+        get() = when (view) {
+            HomeView.All -> "这个分类还没有图片"
+            HomeView.Favorites -> "还没有收藏的图片"
+            HomeView.Guest -> "还没有游客上传的图片"
+        }
+
+    val gridEmptyHint: String
+        get() = when (view) {
+            HomeView.All -> "试试左上角换一个分类"
+            HomeView.Favorites -> "在图片详情里点「收藏」，就会出现在这里"
+            HomeView.Guest -> "游客上传区目前是空的"
+        }
+
+    // 当前详情图是否已收藏：按规范化 src 比对（原始写法可能是完整 URL，直接比会永远不相等）
+    val isCurrentImageFavorite: Boolean
         get() {
-            val categoryName = selectedCategoryView?.label.orEmpty()
-            if (categoryName.isEmpty()) return "正在读取分类"
-            if (totalCount <= 0) return categoryName
-            return "$categoryName · ${loadedCount}/${totalCount}"
+            val image = selectedImage ?: return false
+            return MediaSrc.normalize(image.relativeUrl) in favoriteSrcs
+        }
+
+    // 当前这张图是否正在增删（按钮禁用 + 文案改"处理中"）
+    val isFavoriteMutating: Boolean
+        get() {
+            val image = selectedImage ?: return false
+            return favoriteActionSrc.isNotEmpty() &&
+                favoriteActionSrc == MediaSrc.normalize(image.relativeUrl)
         }
 
     // 登录按钮可不可点：冷却中、提交中都不行；密码为空也不行 —— 除非这台服务器压根没设密码
@@ -206,7 +280,7 @@ class HomeStateHolder(
         clientFactory = clientFactory,
         onUnauthorized = ::handleUnauthorized,
         onAddressCommitted = ::handleAddressCommitted,
-        onReloadRequired = { refreshContent() },
+        onReloadRequired = { reloadAfterAddressChange() },
     )
 
     // 登录子状态机：登录态、token 恢复、冷却、401 清理、退出登录。
@@ -229,6 +303,15 @@ class HomeStateHolder(
         onServerReady = settings::markAddressSaved,
     )
 
+    // 收藏子状态机：收藏/游客列表、增删、是否已收藏、失败提示。
+    // token 与"未登录就弹登录"都通过回调取得，自己不碰登录逻辑。
+    private val favorite = FavoriteController(
+        channel = this,
+        repositoryProvider = { repository },
+        tokenProvider = { authTokenStore.read()?.token.orEmpty() },
+        onRequestLogin = authController::openLoginSheet,
+    )
+
     // 当前生效的仓库；地址未配置时为 null（此时界面在设置态）。
     // 仓库归 facade 持有：换地址时要整体重建，各子状态机只通过 provider 拿"现在那个"。
     private var repository: LumigatherRepository? = null
@@ -249,6 +332,10 @@ class HomeStateHolder(
         restoreAuthSession()
         attachRepository(savedAddress)
         refreshContent()
+        // 收藏与游客列表是游客可见的公共数据，启动时顺手拉一次：左栏两个入口要显示数量，
+        // 不拉的话用户会看到"收藏 0"以为自己的收藏丢了
+        favorite.loadFavorites()
+        favorite.loadGuestUploads()
     }
 
     // 设置界面：地址读写、连接测试、进/出设置界面都委托给设置子状态机。
@@ -283,7 +370,11 @@ class HomeStateHolder(
         // 留着它的唯一后果是之后每次带凭证的请求都 401，而用户完全看不出原因。
         resetAuthForAddressChange()
         resetContentForAddressChange()
+        // 收藏/游客列表也属于"旧服务器的数据"：不清的话图标、计数、可点性全是假的
+        favorite.resetLists()
         sidebar.resetSearch()
+        // 视图回默认分类视图：新服务器上原来停在"收藏"页多半是空的，停在空页会让人以为收藏丢了
+        mutate { it.copy(view = HomeView.All) }
         attachRepository(address, forceRebuild = true)
     }
 
@@ -361,19 +452,36 @@ class HomeStateHolder(
     }
 
     /**
-     * 收藏：本轮只做占位提示，**不做任何状态切换**。
+     * 收藏 / 取消收藏当前详情图（真接口）。
      *
-     * 为什么宁可"点了没反应式地提示"也不做假的已收藏态：假状态会让用户以为存到了服务端，
-     * 等真正接登录时才发现以前的收藏一个都没有 —— 那比现在直接告诉他"还没开放"糟糕得多。
+     * 未登录时由收藏子状态机回调登录弹层入口 —— 登录判断只有一份，不在这里重复写。
      */
-    fun requestFavorite() {
-        // 本轮只改提示，不做任何"已收藏"状态切换：假状态会让用户以为存到了服务端。
-        // 未登录时先引导登录 —— 登录底座已经可用，收藏接口下一轮再接。
-        if (!state.auth.loggedIn) {
-            openLoginSheet()
-            return
+    suspend fun toggleFavorite() {
+        favorite.toggleFavorite()
+    }
+
+    /**
+     * 切换网格展示哪一套数据（分类 / 收藏 / 游客）。
+     *
+     * 互斥靠 [HomeView] 是单值枚举天然保证；这里只负责"切过去之后该做什么"：
+     * 回分类视图时如果分类还没加载过就补拉，收藏/游客每次切过去都重新拉（数据可能被别的设备改过）。
+     */
+    suspend fun selectView(target: HomeView) {
+        mutate {
+            it.copy(
+                view = target,
+                leftSidebarOpen = false,
+                rightSidebarOpen = false,
+                // 切换视图后原来选中的图可能不在新列表里了，一并收起详情，避免"详情挂着一张看不见的图"
+                selectedImage = null,
+                actionHint = null,
+            )
         }
-        mutate { it.copy(actionHint = "收藏功能即将开放") }
+        when (target) {
+            HomeView.All -> if (state.categories.isEmpty()) browse.refreshContent()
+            HomeView.Favorites -> favorite.loadFavorites()
+            HomeView.Guest -> favorite.loadGuestUploads()
+        }
     }
 
     // ---- 登录底座：全部委托给登录子状态机 ----
@@ -433,6 +541,13 @@ class HomeStateHolder(
     // 地址落定之后的主链路：分类 → 第一页 → 后台补张数（全部在浏览子状态机里）
     private suspend fun refreshContent() {
         browse.refreshContent()
+    }
+
+    // 换服务器后要把"所有来自服务器的数据"重新拉一遍：分类图之外还有收藏与游客上传
+    private suspend fun reloadAfterAddressChange() {
+        refreshContent()
+        favorite.loadFavorites()
+        favorite.loadGuestUploads()
     }
 }
 

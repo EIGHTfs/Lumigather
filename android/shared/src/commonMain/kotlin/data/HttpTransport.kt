@@ -79,6 +79,20 @@ interface HttpTransport {
         headers: Map<String, String> = emptyMap(),
         timeoutMs: Long = DEFAULT_REQUEST_TIMEOUT_MS,
     ): HttpRawResponse = throw UnsupportedOperationException("该 HttpTransport 实现未提供 POST 能力")
+
+    /**
+     * DELETE 请求。
+     *
+     * 为什么还要带 body：本项目的「移除收藏」是按 src 删的，后端从请求体里读 `{src}`（不是路径参数）。
+     * DELETE 带 body 在 HTTP 规范里是允许的，OkHttp 也支持（`.delete(requestBody)`）。
+     */
+    suspend fun delete(
+        url: String,
+        body: String,
+        contentType: String = JSON_CONTENT_TYPE,
+        headers: Map<String, String> = emptyMap(),
+        timeoutMs: Long = DEFAULT_REQUEST_TIMEOUT_MS,
+    ): HttpRawResponse = throw UnsupportedOperationException("该 HttpTransport 实现未提供 DELETE 能力")
 }
 
 /**

@@ -89,12 +89,16 @@ private class AuthTransport(
 
     var lastLoginRequestBody: String? = null
     var lastLogoutAuthorization: String? = null
+    var favoriteWriteCount: Int = 0
 
     override suspend fun get(url: String, query: Map<String, String>, timeoutMs: Long): HttpRawResponse =
         when {
             url.endsWith("/api/lumigather") -> HttpRawResponse(200, SITE_CONFIG_JSON, "application/json")
             url.endsWith("/api/images") -> HttpRawResponse(200, IMAGES_JSON, "application/json")
             url.endsWith("/api/status") -> HttpRawResponse(statusCode, statusBody, "application/json")
+            // 收藏与游客上传是裸数组：返回空数组，避免启动时因 404 冒出一条无关的失败提示
+            url.endsWith("/api/favorites") -> HttpRawResponse(200, "[]", "application/json")
+            url.endsWith("/api/uploaded") -> HttpRawResponse(200, "[]", "application/json")
             else -> HttpRawResponse(404, "{}", "application/json")
         }
 
@@ -112,6 +116,11 @@ private class AuthTransport(
         url.endsWith("/api/logout") -> {
             lastLogoutAuthorization = headers["Authorization"]
             HttpRawResponse(200, """{"ok":true}""", "application/json")
+        }
+        // 收藏写接口：本文件只关心"有没有真的发出去"，细节由 FavoriteFlowTest 覆盖
+        url.endsWith("/api/favorites") -> {
+            favoriteWriteCount += 1
+            HttpRawResponse(200, """{"ok":true,"favorites":[]}""", "application/json")
         }
         else -> HttpRawResponse(404, "{}", "application/json")
     }
@@ -321,24 +330,34 @@ class SessionBoundaryTest {
     }
 
     @Test
-    fun favoriteOpensLoginSheetWhenLoggedOutAndShowsComingSoonWhenLoggedIn() = runBlocking {
+    fun favoriteOpensLoginSheetWhenLoggedOutAndWritesWhenLoggedIn() = runBlocking {
         val tokenStore = MemoryAuthTokenStore()
-        val stateHolder = holder(AuthTransport(), tokenStore)
+        val transport = AuthTransport()
+        val stateHolder = holder(transport, tokenStore)
         stateHolder.bootstrap()
+        // 收藏按钮只在详情栏里，先选中一张图（toggleFavorite 对"没有选中图"是直接返回的）
+        stateHolder.openDetail(
+            com.eightfs.lumigather.data.ImageItem(
+                name = "a.png",
+                relativeUrl = "/api/media?file=%2Fa.png",
+                absoluteUrl = "http://h:8081/api/media?file=%2Fa.png",
+            ),
+        )
 
-        // 未登录：点收藏 → 打开登录弹层（不去做假的收藏态）
-        stateHolder.requestFavorite()
+        // 未登录：点收藏 → 打开登录弹层，且不发写请求（不会拿匿名态去撞 401）
+        stateHolder.toggleFavorite()
         assertTrue(stateHolder.state.loginSheetOpen, "未登录点收藏应弹登录")
         assertNull(stateHolder.state.actionHint, "此时不该出现任何收藏反馈")
+        assertEquals(0, transport.favoriteWriteCount, "未登录不该发收藏写请求")
 
-        // 登录后：提示功能即将开放
+        // 登录后再点：真的走写接口（本用例只验"发出去了"，具体结果由 FavoriteFlowTest 覆盖）
         stateHolder.closeLoginSheet()
         stateHolder.openLoginSheet()
         stateHolder.updateLoginPassword("pw")
         stateHolder.submitLogin()
-        stateHolder.requestFavorite()
+        stateHolder.toggleFavorite()
 
-        assertEquals("收藏功能即将开放", stateHolder.state.actionHint)
         assertFalse(stateHolder.state.loginSheetOpen)
+        assertEquals(1, transport.favoriteWriteCount, "登录后点收藏应发出写请求")
     }
 }

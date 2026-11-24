@@ -107,6 +107,8 @@ fun RightSidebar(
 
         BottomActionBar(
             isDownloading = state.downloadState is DownloadUiState.Downloading,
+            isFavorite = state.isCurrentImageFavorite,
+            isFavoriteMutating = state.isFavoriteMutating,
             onDownload = onDownload,
             onFavorite = onFavorite,
             onClose = onClose,
@@ -215,6 +217,8 @@ private fun ActionStatusLine(state: HomeUiState) {
 @Composable
 private fun BottomActionBar(
     isDownloading: Boolean,
+    isFavorite: Boolean,
+    isFavoriteMutating: Boolean,
     onDownload: () -> Unit,
     onFavorite: () -> Unit,
     onClose: () -> Unit,
@@ -234,11 +238,17 @@ private fun BottomActionBar(
             enabled = !isDownloading,
         )
         AppPillButton(
-            text = "收藏",
+            // 三个状态一眼可分：未收藏="收藏"、已收藏="已收藏"（实心主色）、处理中="处理中…"（禁用）
+            text = when {
+                isFavoriteMutating -> "处理中…"
+                isFavorite -> "已收藏"
+                else -> "收藏"
+            },
             onClick = onFavorite,
             modifier = Modifier.weight(1f),
-            variant = PillVariant.Secondary,
+            variant = if (isFavorite) PillVariant.Primary else PillVariant.Secondary,
             size = PillSize.Compact,
+            enabled = !isFavoriteMutating,
         )
         AppPillButton(
             text = "关闭",

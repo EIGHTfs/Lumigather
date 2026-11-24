@@ -12,6 +12,7 @@
 
 package com.eightfs.lumigather.data
 
+import com.tencent.kuikly.core.nvi.serialization.json.JSONArray
 import com.tencent.kuikly.core.nvi.serialization.json.JSONObject
 import kotlin.coroutines.cancellation.CancellationException
 
@@ -24,6 +25,17 @@ private const val ENDPOINT_IMAGES = "/images"
 private const val ENDPOINT_STATUS = "/status"
 private const val ENDPOINT_LOGIN = "/login"
 private const val ENDPOINT_LOGOUT = "/logout"
+private const val ENDPOINT_FAVORITES = "/favorites"
+private const val ENDPOINT_UPLOADED = "/uploaded"
+
+// 收藏写操作的请求体字段名（与后端 readJsonBody 后取的键逐字一致）
+private const val BODY_SRC = "src"
+private const val BODY_NAME = "name"
+private const val BODY_TITLE = "title"
+private const val BODY_CAT = "cat"
+private const val BODY_DIR = "dir"
+private const val BODY_SIZE = "size"
+private const val BODY_ROOT = "root"
 
 // 登录请求体的字段名（与后端 readBody 后取的键逐字一致）
 private const val BODY_PASSWORD = "password"
@@ -157,7 +169,9 @@ class ApiClient(
             return ApiResult.Err(ApiError.Network(describeFailure(failure), failure))
         }
 
-        val session = when (val parsed = interpret(raw, { parseLoginSession(it, remember) }, isAuthAttempt = true)) {
+        val session = when (val parsed = interpret(raw, isAuthAttempt = true) { body ->
+            parseLoginSession(JSONObject(body), remember)
+        }) {
             is ApiResult.Ok -> parsed.value
             is ApiResult.Err -> return parsed
         }
@@ -205,6 +219,45 @@ class ApiClient(
     // 保留给自检与"模型没走仓库"的兜底场景。
     fun mediaUrl(item: ImageItem): String = mediaUrlOf(baseUrl, item)
 
+    /**
+     * GET /api/favorites —— 游客可看。
+     *
+     * 响应是**裸数组**（`[{...}]`），不是 `{items:[...]}` 包装，所以走数组通道解析。
+     * 条目里的 src 在解析处就规范化（见 parseFavoriteEntry）。
+     */
+    suspend fun fetchFavorites(): ApiResult<List<FavoriteEntry>> =
+        getJsonArray(ENDPOINT_FAVORITES) { array -> array.mapFavoriteEntries() }
+
+    /**
+     * POST /api/favorites —— 需登录（Bearer token）。
+     *
+     * 返回里带完整 favorites 列表：成功与"已存在"两种分支都直接用它替换本地列表，
+     * 不用再加一次 GET。
+     */
+    suspend fun addFavorite(request: FavoriteRequest, token: String): ApiResult<FavoriteMutation> {
+        val body = JSONObject().apply {
+            put(BODY_SRC, MediaSrc.normalize(request.src))
+            put(BODY_NAME, request.name)
+            put(BODY_TITLE, request.title)
+            put(BODY_CAT, request.cat)
+            put(BODY_DIR, request.dir)
+            put(BODY_SIZE, request.size)
+            put(BODY_ROOT, request.root)
+        }.toString()
+        return writeJson(ENDPOINT_FAVORITES, body, token, isDelete = false, parse = ::parseFavoriteMutation)
+    }
+
+    /** DELETE /api/favorites —— 需登录；后端从请求体里读 `{src}`（不是路径参数）。 */
+    suspend fun removeFavorite(src: String, token: String): ApiResult<List<FavoriteEntry>> {
+        val body = JSONObject().put(BODY_SRC, MediaSrc.normalize(src)).toString()
+        // 数组缺失时会返回空列表：服务端异常降级也不该让客户端崩
+        return writeJson(ENDPOINT_FAVORITES, body, token, isDelete = true, parse = ::parseFavoritesField)
+    }
+
+    /** GET /api/uploaded —— 游客可看；同样是裸数组。 */
+    suspend fun fetchUploaded(): ApiResult<List<UploadedEntry>> =
+        getJsonArray(ENDPOINT_UPLOADED) { array -> array.mapUploadedEntries() }
+
     // 四个 GET 共用的执行骨架：发请求 → 判状态码 → 解 JSON → 抽 error → 映射模型。
     private suspend fun <T> getJson(
         endpoint: String,
@@ -223,17 +276,80 @@ class ApiClient(
         } catch (failure: Throwable) {
             return ApiResult.Err(ApiError.Network(describeFailure(failure), failure))
         }
-        return interpret(raw, parse)
+        return interpret(raw) { body -> parse(JSONObject(body)) }
+    }
+
+    // 数组响应通道（favorites / uploaded 都是裸数组，不是 {items:[...]} 包装）
+    private suspend fun <T> getJsonArray(
+        endpoint: String,
+        parse: (JSONArray) -> T,
+    ): ApiResult<T> {
+        if (!isConfigured) return ApiResult.Err(ApiError.InvalidConfig("baseUrl 为空"))
+
+        val url = baseUrl + API_PREFIX + endpoint
+        val raw = try {
+            transport.get(url, emptyMap(), requestTimeoutMs)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Throwable) {
+            return ApiResult.Err(ApiError.Network(describeFailure(failure), failure))
+        }
+        return interpret(raw) { body -> parse(JSONArray(body)) }
+    }
+
+    /**
+     * 写请求通道（收藏的增删）：POST/DELETE + Bearer token + 对象响应。
+     *
+     * token 为空时仍然发出去：让服务端用 401 回答，比在客户端猜"算不算登录"更可靠 ——
+     * 服务端才是会话有效性的唯一裁判（本地 token 可能已过期但还没被发现）。
+     */
+    private suspend fun <T> writeJson(
+        endpoint: String,
+        body: String,
+        token: String,
+        isDelete: Boolean,
+        parse: (JSONObject) -> T,
+    ): ApiResult<T> {
+        if (!isConfigured) return ApiResult.Err(ApiError.InvalidConfig("baseUrl 为空"))
+
+        val url = baseUrl + API_PREFIX + endpoint
+        val headers = if (token.isBlank()) {
+            emptyMap()
+        } else {
+            mapOf(HEADER_AUTHORIZATION to BEARER_PREFIX + token)
+        }
+        val raw = try {
+            if (isDelete) {
+                transport.delete(url, body, headers = headers, timeoutMs = requestTimeoutMs)
+            } else {
+                transport.post(url, body, headers = headers, timeoutMs = requestTimeoutMs)
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Throwable) {
+            return ApiResult.Err(ApiError.Network(describeFailure(failure), failure))
+        }
+        return interpret(raw) { text -> parse(JSONObject(text)) }
     }
 
     /**
      * @param isAuthAttempt 这次请求本身就是"验证凭证"（登录）。为 true 时 401 只当普通失败返回，
      *                      不触发 [onUnauthorized] —— 密码输错不该被当成"会话过期"去清别人的登录态。
      */
+    /**
+     * 统一的"状态码 + 响应体"解释器。
+     *
+     * 用 [decode] 而不是直接收 JSONObject：收藏与游客上传的响应是**裸数组**，
+     * 与其它接口的对象响应只差最后一步解码 —— 把差异收进一个 lambda，
+     * 状态码判定、401 回调、200 包 error 的处理就都只有一份（不会出现"对象版判了 401、数组版忘了"）。
+     *
+     * @param isAuthAttempt 这次请求本身就是"验证凭证"（登录）。为 true 时 401 只当普通失败返回，
+     *                      不触发 [onUnauthorized] —— 密码输错不该被当成"会话过期"去清别人的登录态。
+     */
     private fun <T> interpret(
         raw: HttpRawResponse,
-        parse: (JSONObject) -> T,
         isAuthAttempt: Boolean = false,
+        decode: (String) -> T,
     ): ApiResult<T> {
         // 先判状态码：非 2xx 时 body 往往不是 JSON（或虽是 JSON 但只有 error），不值得再解析一遍。
         if (raw.statusCode !in HTTP_SUCCESS_RANGE) {
@@ -247,21 +363,16 @@ class ApiClient(
             return ApiResult.Err(ApiError.Http(raw.statusCode, serverMessage))
         }
 
-        val json = try {
-            JSONObject(raw.bodyText)
-        } catch (failure: Throwable) {
-            return ApiResult.Err(ApiError.Parse(describeFailure(failure), bodySnippet(raw.bodyText)))
-        }
-
         // 后端存在"200 + {"error": ...}"的路径（实测：root 指向不存在路径时，某些前缀下走这条）。
         // 不抽这个字段就会把一次失败当成"空目录"成功返回，UI 表现为"分类是空的"而没有任何错误提示。
-        val serverError = extractServerError(json)
+        // 数组响应解析成 JSONObject 会抛异常，runCatching 直接给空串 —— 正好不误判。
+        val serverError = runCatching { extractServerError(JSONObject(raw.bodyText)) }.getOrDefault("")
         if (serverError.isNotBlank()) {
             return ApiResult.Err(ApiError.Http(raw.statusCode, serverError))
         }
 
         return try {
-            ApiResult.Ok(parse(json))
+            ApiResult.Ok(decode(raw.bodyText))
         } catch (failure: Throwable) {
             ApiResult.Err(ApiError.Parse(describeFailure(failure), bodySnippet(raw.bodyText)))
         }

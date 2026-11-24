@@ -41,6 +41,7 @@ import ui.components.AppIconButton
 import ui.components.AppLoading
 import ui.screens.HomeLayout
 import ui.screens.state.HomeUiState
+import ui.screens.state.HomeView
 
 @Composable
 fun HomeScreen(
@@ -204,15 +205,18 @@ private fun HomeContent(
     val categoryError = state.categoryError
     val pageError = state.pageError
 
+    // 收藏/游客视图没有"分类"概念，分类加载态与分类错误只对 All 视图有意义
+    val showCategoryStates = state.view == HomeView.All
+
     when {
-        categoryError != null -> AppError(
+        showCategoryStates && categoryError != null -> AppError(
             modifier = Modifier.fillMaxSize(),
             title = "无法加载分类",
             hint = categoryError.userMessage,
             onRetry = onRetry,
         )
 
-        state.isLoadingCategories -> AppLoading(modifier = Modifier.fillMaxSize())
+        showCategoryStates && state.isLoadingCategories -> AppLoading(modifier = Modifier.fillMaxSize())
 
         pageError != null -> AppError(
             modifier = Modifier.fillMaxSize(),
@@ -221,12 +225,13 @@ private fun HomeContent(
             onRetry = onRetry,
         )
 
-        state.isLoadingPage -> AppLoading(modifier = Modifier.fillMaxSize())
+        // 三视图共用一个加载态出口：画面一致，数据来源不同
+        state.gridLoading -> AppLoading(modifier = Modifier.fillMaxSize())
 
-        state.images.isEmpty() -> AppEmpty(
+        state.gridImages.isEmpty() -> AppEmpty(
             modifier = Modifier.fillMaxSize(),
-            title = "这个分类还没有图片",
-            hint = "试试左上角换一个分类",
+            title = state.gridEmptyTitle,
+            hint = state.gridEmptyHint,
         )
 
         else -> ImageGrid(state = state, onOpenImage = onOpenImage, onLoadMore = onLoadMore)
@@ -249,8 +254,8 @@ private fun ImageGrid(
         verticalArrangement = Arrangement.spacedBy(metrics.spacingXs),
         horizontalArrangement = Arrangement.spacedBy(metrics.spacingXs),
     ) {
-        items(count = state.images.size) { index ->
-            val image = state.images[index]
+        items(count = state.gridImages.size) { index ->
+            val image = state.gridImages[index]
             ImageCellBlock(
                 imageUrl = image.absoluteUrl,
                 name = image.name,
@@ -260,7 +265,8 @@ private fun ImageGrid(
         }
 
         // 尾部：占满整行（span = maxLineSpan），既是"正在加载更多"的提示，也是触底加载的哨兵
-        if (state.hasMore || state.isLoadingMore) {
+        // 只有分类视图有分页：收藏/游客的列表是一次性取回的完整数组
+        if (state.view == HomeView.All && (state.hasMore || state.isLoadingMore)) {
             item(span = { GridItemSpan(maxLineSpan) }) {
                 LoadMoreFooter(
                     isLoadingMore = state.isLoadingMore,

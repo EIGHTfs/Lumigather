@@ -162,7 +162,7 @@ class DetailActionsTest {
         val holder = holderWith(downloader)
         holder.openDetail(sampleImage)
 
-        holder.requestFavorite()
+        holder.toggleFavorite()
 
         // 登录底座上线后的契约：未登录点收藏 → 打开登录弹层（而不是只弹一句提示）
         assertTrue(holder.state.loginSheetOpen, "未登录点收藏应弹出登录")

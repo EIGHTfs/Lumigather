@@ -121,7 +121,7 @@ fun AppRoot(
         MainScaffold(
             state = state,
             stateHolder = stateHolder,
-            downloadScope = scope,
+            actionScope = scope,
             modifier = modifier,
         )
     }
@@ -171,7 +171,7 @@ private fun registerBackHandling(state: HomeUiState, stateHolder: HomeStateHolde
 private fun MainScaffold(
     state: HomeUiState,
     stateHolder: HomeStateHolder,
-    downloadScope: CoroutineScope,
+    actionScope: CoroutineScope,
     modifier: Modifier = Modifier,
 ) {
     val colors = AppTheme.colors
@@ -262,6 +262,7 @@ private fun MainScaffold(
             LeftSidebar(
                 state = state,
                 onSelectCategory = { categoryName -> scope.launch { stateHolder.selectCategory(categoryName) } },
+                onSelectView = { view -> scope.launch { stateHolder.selectView(view) } },
                 onQueryChange = stateHolder::updateSearchQuery,
                 onClose = stateHolder::closeSidebars,
                 modifier = Modifier
@@ -277,8 +278,9 @@ private fun MainScaffold(
         if (rightProgress > 0f) {
             RightSidebar(
                 state = state,
-                onDownload = { downloadScope.launch { stateHolder.downloadSelectedImage() } },
-                onFavorite = stateHolder::requestFavorite,
+                onDownload = { actionScope.launch { stateHolder.downloadSelectedImage() } },
+                // 收藏是真接口：走挂起方法，用 actionScope（不随设置页切换被取消）
+                onFavorite = { actionScope.launch { stateHolder.toggleFavorite() } },
                 onClose = stateHolder::closeSidebars,
                 modifier = Modifier
                     .align(Alignment.CenterEnd)

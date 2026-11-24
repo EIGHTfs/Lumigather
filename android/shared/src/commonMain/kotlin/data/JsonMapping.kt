@@ -61,6 +61,15 @@ private object Field {
     const val COOKIE_NAME = "cookieName"
     const val NO_PASSWORD = "noPassword"
     const val MESSAGE = "message"
+
+    // 收藏 / 游客上传：条目字段 + 写操作的响应包装（TITLE / NAME / SIZE / URL / ROOT 复用上面的定义）
+    const val SRC = "src"
+    const val CAT = "cat"
+    const val DIR = "dir"
+    const val ADDED_AT = "addedAt"
+    const val ALREADY_EXISTS = "alreadyExists"
+    const val FAVORITES = "favorites"
+    const val ID = "id"
 }
 
 internal fun parseSiteConfig(json: JSONObject): SiteConfig = SiteConfig(
@@ -126,6 +135,52 @@ internal fun parseServerStatus(json: JSONObject): ServerStatus = ServerStatus(
 
 // 顶层 {"error": "..."} 的抽取：失败路径也要能拿到服务端给的原因（如 ENOENT 原文）供日志。
 internal fun extractServerError(json: JSONObject): String = json.optString(Field.ERROR, "")
+
+/**
+ * 收藏条目 → 模型。`src` 在解析处就规范化：比对与去重全靠它，保留原始写法会让
+ * "http://host:port/api/media?..." 与 "/api/media?..." 被当成两张图。
+ */
+internal fun parseFavoriteEntry(json: JSONObject): FavoriteEntry = FavoriteEntry(
+    src = MediaSrc.normalize(json.optString(Field.SRC, "")),
+    name = json.optString(Field.NAME, ""),
+    title = json.optString(Field.TITLE, ""),
+    cat = json.optString(Field.CAT, ""),
+    dir = json.optString(Field.DIR, ""),
+    size = json.optString(Field.SIZE, ""),
+    root = json.optString(Field.ROOT, ""),
+    addedAt = json.optLong(Field.ADDED_AT, 0L),
+)
+
+/** 游客上传条目 → 模型。同样规范化 src（服务端下发的是 /uploads/xxx 相对地址）。 */
+internal fun parseUploadedEntry(json: JSONObject): UploadedEntry = UploadedEntry(
+    id = json.optString(Field.ID, ""),
+    src = MediaSrc.normalize(json.optString(Field.SRC, "")),
+    url = json.optString(Field.URL, ""),
+    name = json.optString(Field.NAME, ""),
+    title = json.optString(Field.TITLE, ""),
+)
+
+/**
+ * 添加收藏的响应：`{ok, alreadyExists?, favorites:[...]}`。
+ *
+ * 两个分支都要读 favorites：服务端在"已存在"时同样回传完整列表，
+ * 客户端直接用它替换本地列表，比再加一次 GET 省一个来回。
+ */
+internal fun parseFavoriteMutation(json: JSONObject): FavoriteMutation = FavoriteMutation(
+    alreadyExists = json.optBoolean(Field.ALREADY_EXISTS, false),
+    favorites = json.optJSONArray(Field.FAVORITES).mapFavoriteEntries(),
+)
+
+// 写操作响应里的 favorites 数组。ApiClient 需要它但 Field 是文件私有的，
+// 所以在这里给一个小出口，而不是把 Field 提升为 internal（那会让字段名常量四处可用）。
+internal fun parseFavoritesField(json: JSONObject): List<FavoriteEntry> =
+    json.optJSONArray(Field.FAVORITES).mapFavoriteEntries()
+
+// 收藏数组（GET 的裸数组，或写操作响应里的 favorites 字段）
+internal fun JSONArray?.mapFavoriteEntries(): List<FavoriteEntry> = mapObjects(::parseFavoriteEntry)
+
+// 游客上传数组（GET /api/uploaded 的裸数组）
+internal fun JSONArray?.mapUploadedEntries(): List<UploadedEntry> = mapObjects(::parseUploadedEntry)
 
 /**
  * 登录响应 → 会话模型。
