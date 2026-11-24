@@ -12,22 +12,12 @@ package ui.screens.state
 import androidx.compose.runtime.mutableStateOf
 import com.eightfs.lumigather.data.ApiClient
 import com.eightfs.lumigather.data.ApiError
-import com.eightfs.lumigather.data.ApiResult
+import com.eightfs.lumigather.data.AuthTokenStore
 import com.eightfs.lumigather.data.CategoryView
-import com.eightfs.lumigather.data.DEFAULT_COUNT_CONCURRENCY
-import com.eightfs.lumigather.data.DEFAULT_PAGE_SIZE
-import com.eightfs.lumigather.data.DEFAULT_SESSION_HOURS
 import com.eightfs.lumigather.data.ImageItem
 import com.eightfs.lumigather.data.LumigatherRepository
-import com.eightfs.lumigather.data.PagedImages
-import com.eightfs.lumigather.data.StoredAuthToken
-import com.eightfs.lumigather.data.AuthTokenStore
 import com.eightfs.lumigather.data.currentEpochMillis
-import kotlinx.coroutines.delay
-import kotlin.coroutines.cancellation.CancellationException
-import ui.screens.download.DownloadResult
 import ui.screens.download.ImageDownloader
-import ui.screens.settings.ServerAddressRules
 import ui.screens.settings.ServerAddressStore
 
 /** 测试连接的四种结局。Testing 与 Idle 分开，是为了让按钮能在进行中禁用并可读地显示"连接中"。 */
@@ -190,23 +180,61 @@ class HomeStateHolder(
     private val authTokenStore: AuthTokenStore,
     // 时钟可注入：测试要稳定构造"已过期 token"这种场景，不能依赖真实时间流逝
     private val nowProvider: () -> Long = { currentEpochMillis() },
-) {
+) : StateChannel {
 
     private val mutableState = mutableStateOf(HomeUiState())
 
-    val state: HomeUiState
+    override val state: HomeUiState
         get() = mutableState.value
 
+    // 唯一的写入口。集中一处写的好处：将来要加日志/埋点只改这里。
+    override fun mutate(transform: (HomeUiState) -> HomeUiState) {
+        mutableState.value = transform(mutableState.value)
+    }
+
+    // 侧栏子状态机：开合、选中图片、搜索词
+    private val sidebar = SidebarController(this, onDetailOpened = ::handleDetailOpened)
+
+    // 下载子状态机：进度、结果、去重、取消
+    private val download = DownloadController(this, imageDownloader)
+
+    // 设置子状态机：地址读写、连接测试、设置界面进出。
+    // 两个回调是本类编排"换地址后的跨功能清理"与"重载内容"的接口。
+    private val settings = SettingsController(
+        channel = this,
+        addressStore = addressStore,
+        clientFactory = clientFactory,
+        onUnauthorized = ::handleUnauthorized,
+        onAddressCommitted = ::handleAddressCommitted,
+        onReloadRequired = { refreshContent() },
+    )
+
+    // 登录子状态机：登录态、token 恢复、冷却、401 清理、退出登录。
+    // 只给它"当前仓库"的 provider，不持有仓库本身（仓库会随换地址整体替换）。
+    private val authController = AuthController(
+        channel = this,
+        authTokenStore = authTokenStore,
+        nowProvider = nowProvider,
+        repositoryProvider = { repository },
+    )
+
+    // 浏览子状态机：分类、分页、切换、重试、服务端状态线。
+    // 放在最后构造：它引用的三个回调分别来自侧栏（收栏）、登录（未设密码标记）、设置（地址已可用）。
+    private val browse = BrowseController(
+        channel = this,
+        repositoryProvider = { repository },
+        onNeedsBootstrap = { bootstrap() },
+        onCategorySelected = ::handleCategorySelected,
+        onServerNeedsSetup = authController::applyServerNeedsSetup,
+        onServerReady = settings::markAddressSaved,
+    )
+
     // 当前生效的仓库；地址未配置时为 null（此时界面在设置态）。
+    // 仓库归 facade 持有：换地址时要整体重建，各子状态机只通过 provider 拿"现在那个"。
     private var repository: LumigatherRepository? = null
 
     // 当前 repository 对应的地址：用来判断"地址是否真的变了"，没变就不重复重建。
     private var activeAddress: String = ""
-
-    // 唯一的写入口。集中一处写的好处：将来要加日志/埋点只改这里。
-    private fun mutate(transform: (HomeUiState) -> HomeUiState) {
-        mutableState.value = transform(mutableState.value)
-    }
 
     /**
      * 启动链路：读已保存地址 →（没有就进设置态）→ 状态 → 分类 → 第一个分类的第一页 → 后台补张数。
@@ -223,218 +251,113 @@ class HomeStateHolder(
         refreshContent()
     }
 
-    // 运行中打开设置：预填当前地址，方便用户只改端口这类小改动。
+    // 设置界面：地址读写、连接测试、进/出设置界面都委托给设置子状态机。
+    // 进设置页要先把两侧栏收起来（设置是整屏替换），而开合状态归侧栏子状态机，所以由本类编排。
     fun openSettings() {
-        val savedAddress = addressStore.read()
-        mutate {
-            it.copy(
-                settingsOpen = true,
-                addressDraft = savedAddress,
-                addressError = null,
-                testState = ConnectionTestState.Idle,
-                hasSavedAddress = savedAddress.isNotBlank(),
-                leftSidebarOpen = false,
-                rightSidebarOpen = false,
-            )
-        }
+        sidebar.closeSidebars()
+        settings.openSettings()
     }
 
     fun updateAddressDraft(address: String) {
-        mutate { it.copy(addressDraft = address, addressError = null) }
+        settings.updateAddressDraft(address)
     }
 
-    /**
-     * 只测试不保存：用户可能只是想确认"地址对不对"，没打算立刻切换。
-     *
-     * 用一个临时的 ApiClient（不塞进 repository）：测试失败不该影响正在显示的旧数据。
-     */
     suspend fun testAddress() {
-        val normalized = ServerAddressRules.normalize(state.addressDraft)
-        if (normalized == null) {
-            mutate {
-                it.copy(
-                    addressError = ServerAddressRules.errorMessageFor(state.addressDraft),
-                    testState = ConnectionTestState.Idle,
-                )
-            }
-            return
-        }
+        settings.testAddress()
+    }
 
-        mutate { it.copy(addressError = null, testState = ConnectionTestState.Testing) }
-        // 临时 client 也接 401 回调：连的可能是另一台服务器，凭证失效同样要清本地 token
-        val result = clientFactory(normalized, ::handleUnauthorized).fetchStatus()
-        mutate { current ->
-            current.copy(
-                testState = when (result) {
-                    is ApiResult.Ok -> ConnectionTestState.Success(result.value.version)
-                    is ApiResult.Err -> ConnectionTestState.Failure(result.error.userMessage)
-                }
-            )
-        }
+    // 保存地址并立即生效：真正的流程在设置子状态机里，跨功能清理由本类编排（见 handleAddressCommitted）
+    suspend fun saveAddress() {
+        settings.saveAddress()
     }
 
     /**
-     * 保存并立即生效：校验 → 持久化 → 重建数据层 → 重跑首屏。
+     * 地址已落盘后的跨功能清理（由设置子状态机同步回调进来）。
      *
-     * "立即生效"是这个功能的重点：改完地址要求用户重启应用，等于把配置藏起来。
-     * 这里保存后直接 refreshContent()，不重建 Activity、不重启进程。
+     * 顺序即依赖：先清"属于旧服务器的凭证"，再清"属于旧服务器的数据"，最后换仓库 ——
+     * 反过来的话，重建出来的仓库可能拿旧 token 去请求一次，白挨一个 401。
+     * 三步之间没有挂起点，UI 看不到中间态。
      */
-    suspend fun saveAddress() {
-        val normalized = ServerAddressRules.normalize(state.addressDraft)
-        if (normalized == null) {
-            mutate { it.copy(addressError = ServerAddressRules.errorMessageFor(state.addressDraft)) }
-            return
-        }
-
-        addressStore.write(normalized)
+    private fun handleAddressCommitted(address: String) {
         // 换服务器必须清 token：旧 token 是上一台服务器签的，对新服务器一律无效，
         // 留着它的唯一后果是之后每次带凭证的请求都 401，而用户完全看不出原因。
-        authTokenStore.clear()
-        // 清掉旧地址的数据再重载：留着旧分类会让用户以为"新地址也是这些图"
-        mutate {
-            it.copy(
-                settingsOpen = false,
-                hasSavedAddress = true,
-                addressDraft = normalized,
-                addressError = null,
-                testState = ConnectionTestState.Idle,
-                auth = AuthUiState(),
-                loginSheetOpen = false,
-                loginPassword = "",
-                loginState = LoginUiState.Idle,
-                categories = emptyList(),
-                images = emptyList(),
-                selectedImage = null,
-                selectedCategory = "",
-                searchQuery = "",
-                categoryError = null,
-                pageError = null,
-                isLoadingCategories = true,
-                isLoadingPage = false,
-                isLoadingMore = false,
-                loadedCount = 0,
-                totalCount = 0,
-                hasMore = false,
-                online = false,
-                serverTitle = "",
-                serverVersion = "",
-            )
-        }
-        // 地址变了就必须换 ApiClient；attachRepository 用 activeAddress 判断是否需要重建
-        attachRepository(normalized, forceRebuild = true)
-        refreshContent()
+        resetAuthForAddressChange()
+        resetContentForAddressChange()
+        sidebar.resetSearch()
+        attachRepository(address, forceRebuild = true)
     }
 
-    // 切换分类：先收起左侧栏（用户点完就想看结果），再清空网格重新拉第一页。
+    // 清登录态（含弹层与密码草稿）。拆分登录子状态机后这里改成调它。
+    // 清登录态（含弹层与密码草稿）—— 换服务器专用，所以连"上一台服务器的登录界面状态"一起清
+    private fun resetAuthForAddressChange() {
+        authController.clearSession(closeSheet = true)
+    }
+
+    // 清浏览数据与状态栏（旧服务器的一切）：数据归浏览，选中图片归侧栏
+    private fun resetContentForAddressChange() {
+        browse.resetContent()
+        sidebar.clearSelectedImage()
+    }
+
+    // 切换分类：具体流程（分页重置、首屏重拉）在浏览子状态机里；收侧栏由它回调本类编排
     suspend fun selectCategory(categoryName: String) {
-        if (categoryName == state.selectedCategory && state.images.isNotEmpty()) {
-            mutate { it.copy(leftSidebarOpen = false) }
-            return
-        }
-        mutate {
-            it.copy(
-                selectedCategory = categoryName,
-                leftSidebarOpen = false,
-                rightSidebarOpen = false,
-                selectedImage = null,
-            )
-        }
-        loadFirstPage(categoryName)
+        browse.selectCategory(categoryName)
+    }
+
+    // 分页加载：到底判据与游标推进都在浏览子状态机里
+    suspend fun loadMore() {
+        browse.loadMore()
+    }
+
+    // 重试：没配置就回设置态；分类没拿到就重跑主链路；只是图片页失败就只重拉当前页
+    suspend fun retry() {
+        browse.retry()
     }
 
     /**
-     * 触底加载下一页。到底判据直接用数据层的 [PagedImages.isEnd]，
-     * 页面与状态都不自己拿 total 算 —— 后端在越界请求时会回 returned=0 但 total 仍是真实值，
-     * 自己算很容易多请求一次空页。
+     * 分类被点了之后要收哪些侧栏（由浏览子状态机回调进来）。
+     *
+     * @param switched true=真的换了分类 → 两侧栏都收、选中图清掉（旧图不属于新分类）；
+     *                 false=只是又点了当前分类 → 只收左栏，右侧详情保持不动。
      */
-    suspend fun loadMore() {
-        val current = state
-        val activeRepository = repository ?: return
-        if (current.isLoadingMore || current.isLoadingPage || !current.hasMore) return
-        if (current.selectedCategory.isEmpty()) return
-
-        mutate { it.copy(isLoadingMore = true) }
-        when (val result = activeRepository.loadPageForCategory(
-            categoryName = current.selectedCategory,
-            offset = current.loadedCount,
-            limit = DEFAULT_PAGE_SIZE,
-        )) {
-            is ApiResult.Ok -> applyPage(result.value, append = true)
-            is ApiResult.Err -> mutate { it.copy(isLoadingMore = false, pageError = result.error) }
+    private fun handleCategorySelected(switched: Boolean) {
+        if (switched) {
+            sidebar.closeAndClearSelection()
+        } else {
+            sidebar.closeLeftSidebar()
         }
     }
 
-    // 重试：没配置就回设置态；分类都没拿到就整条链路重来；只是图片页失败就只重拉当前页。
-    suspend fun retry() {
-        if (repository == null) {
-            bootstrap()
-            return
-        }
-        val categoryName = state.selectedCategory
-        if (state.categories.isEmpty() || categoryName.isEmpty()) {
-            refreshContent()
-            return
-        }
-        loadFirstPage(categoryName)
-    }
-
+    // 侧栏开合与选中项：委托给侧栏子状态机
     fun openLeftSidebar() {
-        mutate { it.copy(leftSidebarOpen = true, rightSidebarOpen = false) }
+        sidebar.openLeftSidebar()
     }
 
-    // 手势开右栏：不指定图片。右栏自己会处理 selectedImage == null 的空态，
-    // 所以从右侧边缘滑出时看到的是「提示去点图片」而不是空白面板。
     fun openRightSidebar() {
-        mutate { it.copy(rightSidebarOpen = true, leftSidebarOpen = false) }
+        sidebar.openRightSidebar()
     }
 
     fun openDetail(image: ImageItem) {
-        mutate {
-            it.copy(
-                rightSidebarOpen = true,
-                selectedImage = image,
-                leftSidebarOpen = false,
-                // 换图就清掉上一张的下载结果与提示，否则用户会以为新图"已保存到相册"
-                downloadState = DownloadUiState.Idle,
-                actionHint = null,
-            )
-        }
+        sidebar.openDetail(image)
     }
 
-    /**
-     * 下载当前详情图到系统相册。
-     *
-     * 防重复：一开始就把状态切成 Downloading，第二次调用在入口处直接返回。
-     * 因为状态是同步写入的（在第一个挂起点之前），连点两下也只有一次会真正跑下去。
-     *
-     * 失败不弹窗、不崩：分类里的三种失败原因各有中文提示，直接显示在动作条上方。
-     */
+    fun closeSidebars() {
+        sidebar.closeSidebars()
+    }
+
+    fun updateSearchQuery(query: String) {
+        sidebar.updateSearchQuery(query)
+    }
+
+    // 点开一张新图后：清掉上一张的下载结果与提示，否则用户会以为新图"已保存到相册"。
+    // 由侧栏子状态机回调进来，具体怎么复位归下载子状态机决定。
+    private fun handleDetailOpened() {
+        download.resetForImageChange()
+    }
+
+    // 下载详情图：委托给下载子状态机（进度/结果/去重/取消都在它那里）
     suspend fun downloadSelectedImage() {
-        val image = state.selectedImage ?: return
-        if (state.downloadState is DownloadUiState.Downloading) return
-
-        mutate { it.copy(downloadState = DownloadUiState.Downloading, actionHint = null) }
-
-        // 结果一次性算成一个新状态再写回：中间不暴露"Downloading 已被清掉但结果还没写"的空档，
-        // 否则按钮会在半路恢复可点。
-        //
-        // 外层兜一层 catch 是防御性的：接口约定"实现不抛异常"，但平台实现可能有漏网的异常类型，
-        // 一旦抛出来没有兜底，状态就会永久停在"保存中…"、按钮永久禁用 —— 那是最难受的一种坏。
-        val nextState = try {
-            when (val result = imageDownloader.saveToGallery(image.absoluteUrl, image.name)) {
-                is DownloadResult.Success -> DownloadUiState.Done("已保存到相册")
-                is DownloadResult.AlreadySaved -> DownloadUiState.Done("相册里已有这张图，未重复保存")
-                is DownloadResult.Failure -> DownloadUiState.Failed(result.message)
-            }
-        } catch (cancelled: CancellationException) {
-            // 协程被取消（页面销毁等）：先把状态复位，再把取消原样抛出 ——
-            // 吞掉取消会让上层的结构化并发逻辑失效。
-            mutate { it.copy(downloadState = DownloadUiState.Idle) }
-            throw cancelled
-        } catch (failure: Throwable) {
-            DownloadUiState.Failed("保存失败：${failure.message ?: "未知错误"}")
-        }
-        mutate { it.copy(downloadState = nextState) }
+        download.downloadSelectedImage()
     }
 
     /**
@@ -453,164 +376,51 @@ class HomeStateHolder(
         mutate { it.copy(actionHint = "收藏功能即将开放") }
     }
 
-    // ---- 登录底座 ----
+    // ---- 登录底座：全部委托给登录子状态机 ----
 
-    /** 打开登录弹层：清空上次的密码与错误，避免把敏感内容留在界面上。 */
     fun openLoginSheet() {
-        mutate {
-            it.copy(
-                loginSheetOpen = true,
-                loginPassword = "",
-                loginState = LoginUiState.Idle,
-                loginBlocked = false,
-                loginRemember = true,
-                actionHint = null,
-            )
-        }
+        authController.openLoginSheet()
     }
 
     fun closeLoginSheet() {
-        mutate { it.copy(loginSheetOpen = false, loginPassword = "", loginState = LoginUiState.Idle, loginBlocked = false) }
+        authController.closeLoginSheet()
     }
 
     fun updateLoginPassword(password: String) {
-        // 改密码时顺手清掉错误提示：用户已经在改了，还挂着「密码错误」会让人以为没生效
-        mutate { it.copy(loginPassword = password, loginState = LoginUiState.Idle) }
+        authController.updateLoginPassword(password)
     }
 
     fun toggleLoginRemember(remember: Boolean) {
-        mutate { it.copy(loginRemember = remember) }
+        authController.toggleLoginRemember(remember)
     }
 
-    /**
-     * 提交登录。
-     *
-     * 失败的处置有两件事：内联显示后端原文（如「密码错误」）+ 冷却 1.5 秒。
-     * 冷却放在这里而不是 UI：按钮只是表现，真正的闸门在状态层 —— 否则任何直接调用都能绕过。
-     */
+    // 提交登录：校验/远端调用/失败冷却/成功落盘 token 都在登录子状态机里
     suspend fun submitLogin() {
-        if (!state.loginSubmittable) return
-        val activeRepository = repository
-            ?: run {
-                mutate { it.copy(loginState = LoginUiState.Failed("请先配置服务器地址")) }
-                return
-            }
-
-        val password = state.loginPassword
-        val remember = state.loginRemember
-        mutate { it.copy(loginState = LoginUiState.Submitting) }
-
-        when (val result = activeRepository.login(password, remember)) {
-            is ApiResult.Ok -> {
-                val session = result.value
-                val expiresAt = session.expiresAt(nowProvider())
-                authTokenStore.write(session.token, expiresAt)
-                mutate {
-                    it.copy(
-                        loginSheetOpen = false,
-                        // 关掉弹层就把密码从内存里清掉，别让它留在状态里
-                        loginPassword = "",
-                        loginState = LoginUiState.Idle,
-                        loginBlocked = false,
-                        auth = AuthUiState(
-                            loggedIn = true,
-                            rememberDevice = remember,
-                            expiresAtEpochMs = expiresAt,
-                            noPassword = session.noPassword,
-                        ),
-                        actionHint = if (session.noPassword) {
-                            "服务端未设置密码，建议尽快设置"
-                        } else {
-                            "登录成功"
-                        },
-                    )
-                }
-            }
-
-            is ApiResult.Err -> {
-                mutate { it.copy(loginState = LoginUiState.Failed(describeLoginFailure(result.error)), loginBlocked = true) }
-                // 冷却：后端没有失败限流/锁定，前端必须自己挡住连点穷举
-                delay(FAILED_LOGIN_COOLDOWN_MS)
-                mutate { it.copy(loginBlocked = false) }
-            }
-        }
+        authController.submitLogin()
     }
 
-    /** 退出登录：先尽力通知服务端，再无条件清本地 —— 本地退不掉会把用户困在登录态。 */
+    // 退出登录：先尽力通知服务端，再无条件清本地 —— 本地退不掉会把用户困在登录态
     suspend fun logout() {
-        val token = authTokenStore.read()?.token.orEmpty()
-        repository?.logout(token)
-        clearAuthSession()
-        mutate { it.copy(actionHint = "已退出登录") }
+        authController.logout()
     }
 
-    // 读本地会话：过期/格式异常一律当未登录，并把坏数据清掉（避免每次启动都带着坏值）
+    // 读本地会话：过期/格式异常一律当未登录（并清掉坏值）
     private fun restoreAuthSession() {
-        val stored = authTokenStore.read()
-        if (stored == null) {
-            mutate { it.copy(auth = AuthUiState()) }
-            return
-        }
-        if (stored.isExpired(nowProvider())) {
-            authTokenStore.clear()
-            mutate { it.copy(auth = AuthUiState()) }
-            return
-        }
-        // 记住勾选状态无法从存储反推，用"剩余时间接近 30 天"判断当时勾没勾；
-        // 判错只影响摘要文案（30 天/3 天），不影响会话有效性。
-        val remainingHours = (stored.expiresAtEpochMs - nowProvider()) / MILLIS_PER_HOUR
-        mutate {
-            it.copy(
-                auth = AuthUiState(
-                    loggedIn = true,
-                    rememberDevice = remainingHours > DEFAULT_SESSION_HOURS,
-                    expiresAtEpochMs = stored.expiresAtEpochMs,
-                ),
-            )
-        }
+        authController.restoreSession()
     }
 
-    /**
-     * 401 回调（ApiClient 在非登录请求收到 401 时调一次）。
-     *
-     * 必须"清 token + 明确提示"，不能静默：用户会以为是网络坏了，
-     * 然后反复点同一个按钮；其实只要重新登录就能恢复。
-     */
+    // 401 回调（ApiClient 在非登录请求收到 401 时调一次）：清 token + 明确提示重新登录
     private fun handleUnauthorized() {
-        clearAuthSession()
-        mutate { it.copy(actionHint = "登录已过期，请重新登录") }
-    }
-
-    private fun clearAuthSession() {
-        authTokenStore.clear()
-        mutate { it.copy(auth = AuthUiState()) }
-    }
-
-    fun closeSidebars() {
-        mutate { it.copy(leftSidebarOpen = false, rightSidebarOpen = false) }
+        authController.handleUnauthorized()
     }
 
     // 从设置界面退回主界面。没配过地址时不允许退：退出去也没有内容可看。
     fun closeSettings() {
-        if (!state.hasSavedAddress) return
-        mutate { it.copy(settingsOpen = false, addressError = null, testState = ConnectionTestState.Idle) }
-    }
-
-    fun updateSearchQuery(query: String) {
-        mutate { it.copy(searchQuery = query) }
+        settings.closeSettings()
     }
 
     private fun enterSettingsMode(hasSavedAddress: Boolean) {
-        mutate {
-            it.copy(
-                isLoadingCategories = false,
-                settingsOpen = true,
-                addressDraft = "",
-                addressError = null,
-                testState = ConnectionTestState.Idle,
-                hasSavedAddress = hasSavedAddress,
-            )
-        }
+        settings.enterSettingsMode(hasSavedAddress)
     }
 
     // 地址变了才重建仓库：重复重建会白丢连接池与已缓存的分类。
@@ -620,112 +430,9 @@ class HomeStateHolder(
         activeAddress = address
     }
 
-    // 地址落定之后的主链路：状态 → 分类 → 第一个分类的第一页 → 后台补张数。
+    // 地址落定之后的主链路：分类 → 第一页 → 后台补张数（全部在浏览子状态机里）
     private suspend fun refreshContent() {
-        val activeRepository = repository ?: return
-        mutate { it.copy(isLoadingCategories = true, categoryError = null) }
-        refreshServerStatus()
-
-        when (val result = activeRepository.loadCategories()) {
-            is ApiResult.Err -> mutate {
-                it.copy(isLoadingCategories = false, categoryError = result.error)
-            }
-
-            is ApiResult.Ok -> {
-                val categories = result.value
-                val firstCategory = categories.firstOrNull()
-                mutate {
-                    it.copy(
-                        isLoadingCategories = false,
-                        categories = categories,
-                        serverTitle = activeRepository.title,
-                        selectedCategory = firstCategory?.name.orEmpty(),
-                        hasSavedAddress = true,
-                    )
-                }
-                if (firstCategory == null) return
-                loadFirstPage(firstCategory.name)
-                fillCategoryCounts(categories.map { it.name })
-            }
-        }
-    }
-
-    // 底部状态栏与顶栏状态用的服务端信息。失败不弹错：离线时它只是把状态点变灰。
-    private suspend fun refreshServerStatus() {
-        val activeRepository = repository ?: return
-        when (val result = activeRepository.loadStatus()) {
-            is ApiResult.Ok -> mutate {
-                // needsSetup 由服务端判定（它才知道有没有 passwordHash）。
-                // 用它刷新 noPassword 标记，是为了让"这台服务器没设密码"的提醒在重启后依然成立 ——
-                // 只靠登录响应里的那个字段的话，重开应用提示就消失了。
-                it.copy(
-                    online = result.value.ok,
-                    serverVersion = result.value.version,
-                    auth = it.auth.copy(noPassword = result.value.needsSetup),
-                )
-            }
-
-            is ApiResult.Err -> mutate { it.copy(online = false) }
-        }
-    }
-
-    private suspend fun loadFirstPage(categoryName: String) {
-        val activeRepository = repository ?: return
-        mutate {
-            it.copy(
-                isLoadingPage = true,
-                isLoadingMore = false,
-                pageError = null,
-                images = emptyList(),
-                loadedCount = 0,
-                totalCount = 0,
-                hasMore = false,
-            )
-        }
-        when (val result = activeRepository.loadPageForCategory(
-            categoryName = categoryName,
-            offset = 0,
-            limit = DEFAULT_PAGE_SIZE,
-        )) {
-            is ApiResult.Ok -> applyPage(result.value, append = false)
-            is ApiResult.Err -> mutate { it.copy(isLoadingPage = false, pageError = result.error) }
-        }
-    }
-
-    private fun applyPage(page: PagedImages, append: Boolean) {
-        mutate { current ->
-            val merged = if (append) current.images + page.images else page.images
-            current.copy(
-                images = merged,
-                isLoadingPage = false,
-                isLoadingMore = false,
-                pageError = null,
-                loadedCount = merged.size,
-                totalCount = page.total,
-                hasMore = !page.isEnd,
-            )
-        }
-    }
-
-    /**
-     * 后台补各分类张数。并发上限 3：单个请求要扫盘（实测最慢 3.4 秒），
-     * 8 个全并发会把 NAS 的盘压住，3 个是"明显变快又不打爆"的折中。
-     *
-     * 回调时机：数据层在整批探测合并之后统一回调，所以界面表现为"张数整批到齐后刷新一次"。
-     * 要改成逐条刷新得改数据层，这里不私自在页面层并发单发（会重现仓库缓存的丢更新）。
-     */
-    private suspend fun fillCategoryCounts(categoryNames: List<String>) {
-        val activeRepository = repository ?: return
-        activeRepository.refreshCategoryCounts(
-            categoryNames = categoryNames,
-            maxConcurrent = DEFAULT_COUNT_CONCURRENCY,
-        ) { updated ->
-            mutate { current ->
-                current.copy(categories = current.categories.map { existing ->
-                    if (existing.name == updated.name) updated else existing
-                })
-            }
-        }
+        browse.refreshContent()
     }
 }
 
