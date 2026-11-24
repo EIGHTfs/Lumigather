@@ -73,20 +73,3 @@ fun AppChip(
     }
 }
 
-/**
- * 分类卡里的色点方标：分类列表要给「这个分类是什么颜色」一个稳定的视觉锚，
- * 但不需要文字，所以单独抽一个方点（圆角小一档，与圆形的选中点区分开）。
- */
-@Composable
-fun AppColorDot(
-    color: Color,
-    modifier: Modifier = Modifier,
-) {
-    val metrics = AppTheme.metrics
-    Box(
-        modifier = modifier
-            .size(metrics.heightPillCompact)
-            .clip(RoundedCornerShape(metrics.radiusSm))
-            .background(color),
-    )
-}

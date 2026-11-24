@@ -1,4 +1,4 @@
-// 左侧分类栏：搜索框 + 分类列表 + 底部状态。
+// 左侧分类栏：站点名标题 + 搜索框 + 分区标题 + 分类列表 + 底部状态。
 //
 // 它只负责"把分类画成一列并接受点击"，滑动与遮罩由 AppRoot 负责，
 // 数据与张数统计由 state/ 负责。所以这个文件里既没有网络调用，也没有位移逻辑。
@@ -6,6 +6,7 @@
 package ui.screens.sidebar
 
 import androidx.compose.runtime.Composable
+import com.tencent.kuikly.compose.foundation.Canvas
 import com.tencent.kuikly.compose.foundation.background
 import com.tencent.kuikly.compose.foundation.layout.Arrangement
 import com.tencent.kuikly.compose.foundation.layout.Box
@@ -16,6 +17,7 @@ import com.tencent.kuikly.compose.foundation.layout.Spacer
 import com.tencent.kuikly.compose.foundation.layout.fillMaxSize
 import com.tencent.kuikly.compose.foundation.layout.fillMaxWidth
 import com.tencent.kuikly.compose.foundation.layout.padding
+import com.tencent.kuikly.compose.foundation.layout.size
 import com.tencent.kuikly.compose.foundation.layout.width
 import com.tencent.kuikly.compose.foundation.lazy.LazyColumn
 import com.tencent.kuikly.compose.foundation.shape.RoundedCornerShape
@@ -24,7 +26,9 @@ import com.tencent.kuikly.compose.material3.Text
 import com.tencent.kuikly.compose.ui.Alignment
 import com.tencent.kuikly.compose.ui.Modifier
 import com.tencent.kuikly.compose.ui.draw.clip
+import com.tencent.kuikly.compose.ui.geometry.Offset
 import com.tencent.kuikly.compose.ui.graphics.SolidColor
+import com.tencent.kuikly.compose.ui.graphics.drawscope.Stroke
 import com.tencent.kuikly.compose.ui.text.TextStyle
 import com.tencent.kuikly.compose.ui.unit.dp
 import theme.AppTheme
@@ -62,8 +66,18 @@ fun LeftSidebar(
             .padding(horizontal = metrics.spacingSm, vertical = metrics.spacingMd),
         verticalArrangement = Arrangement.spacedBy(metrics.spacingMd),
     ) {
-        SidebarHeader(title = "分类", onClose = onClose)
+        SidebarHeader(
+            siteTitle = state.serverTitle.ifBlank { FALLBACK_SITE_TITLE },
+            onClose = onClose,
+        )
         SearchField(query = state.searchQuery, onQueryChange = onQueryChange)
+        SectionTitle(
+            text = sectionTitle(
+                totalCategoryCount = state.categories.size,
+                visibleCategoryCount = state.visibleCategories.size,
+                searching = state.searchQuery.isNotBlank(),
+            ),
+        )
         // weight 只有在 Column 作用域里才可用，所以必须在这里传进去，不能让列表函数自己带
         CategoryList(
             state = state,
@@ -74,8 +88,14 @@ fun LeftSidebar(
     }
 }
 
+/**
+ * 栏头：站点名 + 关闭。
+ *
+ * 标题用站点名而不是固定的「分类」：用户在这一栏里挑的是"这台服务器上有哪些游戏"，
+ * 站点名先回答"我在看谁的库"，分类列表才是答案。
+ */
 @Composable
-private fun SidebarHeader(title: String, onClose: () -> Unit) {
+private fun SidebarHeader(siteTitle: String, onClose: () -> Unit) {
     val colors = AppTheme.colors
     val metrics = AppTheme.metrics
 
@@ -84,7 +104,7 @@ private fun SidebarHeader(title: String, onClose: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
-            text = title,
+            text = siteTitle,
             color = colors.textPrimary,
             fontSize = metrics.fontTitle,
             modifier = Modifier.weight(1f).padding(start = metrics.spacingXs),
@@ -96,7 +116,26 @@ private fun SidebarHeader(title: String, onClose: () -> Unit) {
 }
 
 /**
- * 搜索框：容器底 + 全圆角，里面是「图标 + 输入区」。
+ * 分区标题：「全部游戏 · N 个分类」。
+ *
+ * 作用不是装饰，而是回答"下面这一列是什么、有多少"：分类数量在加载完成前是未知的，
+ * 有了这行用户不必自己数。搜索时改说「搜索结果」，避免明明只筛出 2 条还写着"8 个分类"。
+ */
+@Composable
+private fun SectionTitle(text: String) {
+    val colors = AppTheme.colors
+    val metrics = AppTheme.metrics
+
+    Text(
+        text = text,
+        color = colors.textFaint,
+        fontSize = metrics.fontMicro,
+        modifier = Modifier.padding(start = metrics.spacingXs),
+    )
+}
+
+/**
+ * 搜索框：容器底 + 全圆角，里面是「线性放大镜 + 输入区」。
  *
  * 用 BasicTextField 而不是 material3 的 TextField：后者自带 48dp 高度、浮动标签与描边，
  * 塞不进侧栏这个紧凑的胶囊，硬用会把整栏撑高。占位文案自己叠一层，
@@ -115,7 +154,7 @@ private fun SearchField(query: String, onQueryChange: (String) -> Unit) {
             .padding(horizontal = metrics.spacingMd, vertical = metrics.spacingSm),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(text = HomeLayout.iconSearch, fontSize = metrics.fontSubtitle)
+        SearchIcon()
         Spacer(modifier = Modifier.width(metrics.spacingSm))
         Box(modifier = Modifier.weight(1f)) {
             if (query.isEmpty()) {
@@ -134,6 +173,46 @@ private fun SearchField(query: String, onQueryChange: (String) -> Unit) {
                 cursorBrush = SolidColor(colors.primary),
             )
         }
+    }
+}
+
+/**
+ * 线性放大镜：一个描边圆 + 一根 45° 手柄。
+ *
+ * 为什么自己画而不是用字形：emoji 放大镜是彩色位图字形，在不同 ROM 上渲染出来的
+ * 颜色、粗细、留白都不一样，甚至会盖住旁边文字；而文字里可用的非 emoji 放大镜字形
+ * 大多字体缺失，会退化成方框。用 Canvas 画两条笔画，颜色取自主题、粗细取自令牌，
+ * 全平台一致且不依赖任何字体或图标库。
+ */
+@Composable
+private fun SearchIcon() {
+    val colors = AppTheme.colors
+    val metrics = AppTheme.metrics
+    val strokeWidth = metrics.thicknessRule
+
+    Canvas(modifier = Modifier.size(metrics.sizeInlineIcon)) {
+        val strokePx = strokeWidth.toPx()
+        val lensRadius = size.minDimension * LENS_RADIUS_RATIO
+        val lensCenter = Offset(
+            x = size.width * LENS_CENTER_RATIO,
+            y = size.height * LENS_CENTER_RATIO,
+        )
+
+        drawCircle(
+            color = colors.textFaint,
+            radius = lensRadius,
+            center = lensCenter,
+            style = Stroke(width = strokePx),
+        )
+
+        // 手柄从镜片边缘沿 45° 伸出：起点落在圆周上，终点接近图标方框的右下角
+        val handleOffset = lensRadius * DIAGONAL_UNIT
+        drawLine(
+            color = colors.textFaint,
+            start = Offset(lensCenter.x + handleOffset, lensCenter.y + handleOffset),
+            end = Offset(size.width * HANDLE_END_RATIO, size.height * HANDLE_END_RATIO),
+            strokeWidth = strokePx,
+        )
     }
 }
 
@@ -159,7 +238,9 @@ private fun CategoryList(
     LazyColumn(
         modifier = modifier.fillMaxWidth(),
         contentPadding = PaddingValues(vertical = metrics.spacingXs),
-        verticalArrangement = Arrangement.spacedBy(metrics.spacingXs),
+        // 行间距从 spacingXs 提到 spacingSm：设计稿里行与行之间更透气，
+        // 且不放宽行内边距（AppListRow 的内部留白是共用样式，不在本轮改动范围）
+        verticalArrangement = Arrangement.spacedBy(metrics.spacingSm),
     ) {
         // 用带 count 的成员重载而不是 items(list) 扩展：与页面其它列表一致，
         // 也避免与网格的 items 扩展函数同名冲突。
@@ -178,22 +259,50 @@ private fun CategoryList(
     }
 }
 
-// 侧栏底部摘要：站点名 + 连接状态 + 分类数量。与列表分离，列表滚动时它不动。
+/**
+ * 侧栏底部摘要：只留连接状态。
+ *
+ * 站点名已经上移到栏头，分类数量已经上移到分区标题 —— 这里再写一遍就是同一屏里
+ * 同一件事说两次。底部现在只负责"这台服务器现在通不通"。
+ */
 @Composable
 private fun SidebarFooter(state: HomeUiState) {
     val colors = AppTheme.colors
     val metrics = AppTheme.metrics
 
-    Column(modifier = Modifier.fillMaxWidth()) {
-        Text(
-            text = state.serverTitle.ifBlank { "拾光集" },
-            color = colors.textSecondary,
-            fontSize = metrics.fontCaption,
-        )
-        Text(
-            text = "${if (state.online) "服务器在线" else "服务器离线"} · 共 ${state.categories.size} 个分类",
-            color = colors.textFaint,
-            fontSize = metrics.fontMicro,
-        )
-    }
+    Text(
+        text = if (state.online) STATUS_ONLINE else STATUS_OFFLINE,
+        color = if (state.online) colors.textSecondary else colors.textGhost,
+        fontSize = metrics.fontMicro,
+        modifier = Modifier.fillMaxWidth().padding(start = metrics.spacingXs),
+    )
 }
+
+/** 分区标题：全部 / 搜索结果 */
+private fun sectionTitle(
+    totalCategoryCount: Int,
+    visibleCategoryCount: Int,
+    searching: Boolean,
+): String {
+    val count = if (searching) visibleCategoryCount else totalCategoryCount
+    val label = if (searching) SECTION_LABEL_SEARCH else SECTION_LABEL_ALL
+    return "$label$SECTION_SEPARATOR$count$SECTION_UNIT"
+}
+
+/** 站点名取不到时的兜底文案（服务端 title 为空说明配置没填） */
+private const val FALLBACK_SITE_TITLE = "拾光集"
+
+private const val SECTION_LABEL_ALL = "全部游戏"
+private const val SECTION_LABEL_SEARCH = "搜索结果"
+private const val SECTION_SEPARATOR = " · "
+private const val SECTION_UNIT = " 个分类"
+
+private const val STATUS_ONLINE = "服务器在线"
+private const val STATUS_OFFLINE = "服务器离线"
+
+// 放大镜几何比例：镜片占图标的三成、圆心偏左上，右下留给手柄，
+// 这样 16dp 的小方框里既有圆又有方向感，不至于糊成一团。
+private const val LENS_RADIUS_RATIO = 0.30f
+private const val LENS_CENTER_RATIO = 0.40f
+private const val DIAGONAL_UNIT = 0.707f
+private const val HANDLE_END_RATIO = 0.94f

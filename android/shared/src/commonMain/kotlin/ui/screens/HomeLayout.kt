@@ -54,5 +54,4 @@ object HomeLayout {
     const val iconSettings: String = "⚙"
     const val iconClose: String = "✕"
     const val iconServer: String = "🖥"
-    const val iconSearch: String = "🔍"
 }

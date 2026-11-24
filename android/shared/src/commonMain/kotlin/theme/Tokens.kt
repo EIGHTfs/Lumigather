@@ -132,6 +132,17 @@ internal object RawSize {
     /** 选中态圆点 */
     val selectedDot: Dp = 6.dp
 
+    // 张数胶囊：固定宽高才能让每行右侧竖着看是一条直线。
+    // 宽度按最长内容反推：6 字符千分位（"72,651"）在 12sp 下约 42dp，加左右各 6dp 内衬约 54dp，
+    // 留 2dp 余量到 56dp —— 同时能容纳 7 字符（"1,234,567"）不换行。
+    val countBadgeWidth: Dp = 56.dp
+
+    // 高度 22dp：比行内 12sp 文字行高略高，形成胶囊形状，又不至于把行撑高。
+    val countBadgeHeight: Dp = 22.dp
+
+    // 行内线性图标方框边长：与 13sp 正文视觉等高，放大镜、箭头这类细线图标都用它。
+    val inlineIcon: Dp = 16.dp
+
     /** 投影：静止 2、浮起面板 6 */
     val elevationResting: Dp = 2.dp
     val elevationRaised: Dp = 6.dp

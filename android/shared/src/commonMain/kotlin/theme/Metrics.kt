@@ -31,7 +31,10 @@ import com.tencent.kuikly.compose.ui.unit.TextUnit
  * @property heightPillRegular 胶囊按钮常规高度（页面内主操作）
  * @property heightPillLarge 胶囊按钮大高度（首屏唯一主按钮）
  * @property thicknessRule 分隔线与描边厚度
- * @property sizeDot 选中态右侧圆点直径
+ * @property sizeDot 圆点直径（分类色标、选中态标记共用：两处都是「一个纯色小圆」，同值才不打架）
+ * @property widthCountBadge 张数胶囊固定宽度（等宽是为了右侧竖看对齐）
+ * @property heightCountBadge 张数胶囊高度
+ * @property sizeInlineIcon 行内线性图标方框边长
  * @property elevationResting 静止元素投影高度（卡片、圆形按钮）
  * @property elevationRaised 浮起面板投影高度（底部浮层、侧栏）
  */
@@ -57,6 +60,9 @@ data class Metrics(
     val heightPillLarge: Dp = RawSize.pillLarge,
     val thicknessRule: Dp = RawSize.hairline,
     val sizeDot: Dp = RawSize.selectedDot,
+    val widthCountBadge: Dp = RawSize.countBadgeWidth,
+    val heightCountBadge: Dp = RawSize.countBadgeHeight,
+    val sizeInlineIcon: Dp = RawSize.inlineIcon,
     val elevationResting: Dp = RawSize.elevationResting,
     val elevationRaised: Dp = RawSize.elevationRaised,
 ) {
