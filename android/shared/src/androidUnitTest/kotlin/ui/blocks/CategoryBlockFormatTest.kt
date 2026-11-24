@@ -9,6 +9,7 @@ package ui.blocks
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import ui.components.formatCountThousands
 
 class CategoryBlockFormatTest {
 

@@ -31,9 +31,10 @@ import com.tencent.kuikly.compose.ui.geometry.Offset
 import com.tencent.kuikly.compose.ui.graphics.SolidColor
 import com.tencent.kuikly.compose.ui.graphics.drawscope.Stroke
 import com.tencent.kuikly.compose.ui.text.TextStyle
-import com.tencent.kuikly.compose.ui.text.style.TextAlign
 import com.tencent.kuikly.compose.ui.unit.dp
 import theme.AppTheme
+import ui.components.AppCountBadge
+import ui.components.formatCountThousands
 import ui.blocks.CategoryBlock
 import ui.components.AppEmpty
 import ui.components.AppIconButton
@@ -320,37 +321,8 @@ private fun VirtualViewRow(
             // 字形图标而不是图片资源：本项目不引图标库，分类行也是同一种线性风格
             Text(text = glyph, color = colors.textSecondary, fontSize = metrics.fontSubtitle)
         },
-        trailing = { CountPill(count = count, highlighted = selected) },
+        trailing = { AppCountBadge(text = formatCountThousands(count), highlighted = selected) },
     )
-}
-
-/**
- * 数量胶囊：与分类行的张数胶囊同款（宽高、圆角、字号都取同一批度量）。
- *
- * 为什么这里复制一份而不是复用 ui/blocks 里的 CountBadge：那个是 CategoryBlock 的文件私有实现，
- * 本轮刻意不动 ui/blocks。等两处都要改时应该把它提到 ui/components 去共用。
- */
-@Composable
-private fun CountPill(count: Int, highlighted: Boolean) {
-    val colors = AppTheme.colors
-    val metrics = AppTheme.metrics
-
-    Box(
-        modifier = Modifier
-            .width(metrics.widthCountBadge)
-            .height(metrics.heightCountBadge)
-            .clip(RoundedCornerShape(metrics.radiusPill))
-            .background(if (highlighted) colors.primary else colors.container),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = count.toString(),
-            color = if (highlighted) colors.onPrimary else colors.textSecondary,
-            fontSize = metrics.fontCaption,
-            maxLines = 1,
-            textAlign = TextAlign.Center,
-        )
-    }
 }
 
 /**
