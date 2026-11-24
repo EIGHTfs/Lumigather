@@ -20,9 +20,9 @@ import kotlin.test.assertTrue
 
 // 站点配置最小样本：一个分类 + 它的绝对路径（真实响应里 categories 与 directories 是两张表）
 private const val SITE_CONFIG_JSON = """
-{"title":"拾光集","fsRoot":"/root/fallback","imagesPerRow":20,
+{"title":"拾光集","fsRoot":"test-root/fallback","imagesPerRow":20,
  "categories":[{"name":"崩坏3","label":"崩坏3","color":"#c084fc"}],
- "directories":[{"path":"/root/honkai","category":"崩坏3"}]}
+ "directories":[{"path":"test-root/honkai","category":"崩坏3"}]}
 """
 
 private const val STATUS_JSON = """
@@ -30,9 +30,9 @@ private const val STATUS_JSON = """
 """
 
 private const val IMAGES_JSON = """
-{"path":"/root/honkai","root":"/root/honkai","recursive":true,"count":1,"total":1,
+{"path":"test-root/honkai","root":"test-root/honkai","recursive":true,"count":1,"total":1,
  "offset":0,"limit":1,"returned":1,
- "images":[{"name":"a.png","path":"/root/honkai/a.png","url":"/api/media?file=%2Fa.png",
+ "images":[{"name":"a.png","path":"test-root/honkai/a.png","url":"/api/media?file=%2Fa.png",
             "size":"1.0 KB","modified":"2023-08-18T06:56:03.097Z"}]}
 """
 
@@ -108,7 +108,7 @@ class HomeStateHolderTest {
 
     private fun holderWith(store: ServerAddressStore, transport: HttpTransport): HomeStateHolder =
         HomeStateHolder(
-            clientFactory = { address -> ApiClient(address, transport) },
+            clientFactory = { address, _ -> ApiClient(address, transport) },
             addressStore = store,
             // 设置链路不涉及下载，给一个"永不成功"的假实现即可（真被调用说明有 bug）
             imageDownloader = object : ui.screens.download.ImageDownloader {
@@ -121,6 +121,18 @@ class HomeStateHolderTest {
                         "测试里不应该走到下载",
                     )
             },
+            // 设置链路也不碰登录态：给个内存桩即可
+            authTokenStore = object : com.eightfs.lumigather.data.AuthTokenStore {
+                private var stored: com.eightfs.lumigather.data.StoredAuthToken? = null
+                override fun read(): com.eightfs.lumigather.data.StoredAuthToken? = stored
+                override fun write(token: String, expiresAtEpochMs: Long) {
+                    stored = com.eightfs.lumigather.data.StoredAuthToken(token, expiresAtEpochMs)
+                }
+                override fun clear() {
+                    stored = null
+                }
+            },
+            nowProvider = { 1_000_000L },
         )
 
     @Test
@@ -141,7 +153,7 @@ class HomeStateHolderTest {
 
         assertFalse(holder.state.settingsOpen)
         assertEquals(1, holder.state.categories.size)
-        assertEquals("/root/honkai", holder.state.categories.first().rootPath)
+        assertEquals("test-root/honkai", holder.state.categories.first().rootPath)
         // 用的必须是存下来的地址
         assertTrue(transport.requestedUrls.all { it.startsWith("http://h:8081/") })
     }

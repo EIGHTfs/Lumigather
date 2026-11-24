@@ -68,6 +68,12 @@ class LumigatherRepository(private val api: ApiClient) {
     // GET /api/status：底部状态栏的"在线 · 版本 · 端口"。
     suspend fun loadStatus(): ApiResult<ServerStatus> = api.fetchStatus()
 
+    // 登录/登出：仓库只做转发，token 的保存与清理由状态层负责（它才知道"当前是哪台服务器"）。
+    suspend fun login(password: String, remember: Boolean): ApiResult<LoginSession> =
+        api.login(password, remember)
+
+    suspend fun logout(token: String): ApiResult<Unit> = api.logout(token)
+
     /**
      * 拉分类列表（含每个分类的绝对路径），不含张数。
      *

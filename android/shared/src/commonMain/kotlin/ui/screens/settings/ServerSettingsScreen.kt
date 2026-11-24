@@ -36,6 +36,7 @@ import theme.AppTheme
 import ui.components.AppCard
 import ui.components.AppIconButton
 import ui.components.AppPillButton
+import ui.components.PillSize
 import ui.components.PillVariant
 import ui.screens.HomeLayout
 import ui.screens.state.ConnectionTestState
@@ -47,6 +48,8 @@ fun ServerSettingsScreen(
     onAddressChange: (String) -> Unit,
     onTestConnection: () -> Unit,
     onSave: () -> Unit,
+    onLogin: () -> Unit,
+    onLogout: () -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -75,6 +78,9 @@ fun ServerSettingsScreen(
         }
 
         item { ConnectionStatusCard(state = state) }
+
+        // 账号块放在连接状态之后、动作按钮之前：先确认"连得上"，再谈"登录谁"
+        item { AccountCard(state = state, onLogin = onLogin, onLogout = onLogout) }
 
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(metrics.spacingSm)) {
@@ -226,3 +232,58 @@ private fun SettingsHint() {
 
 private const val IDLE_MESSAGE = "填好地址后可以先点「测试连接」确认能通"
 private const val TESTING_MESSAGE = "正在连接服务器…"
+
+/**
+ * 账号块：登录入口与登录态摘要。
+ *
+ * 未登录只给「登录」（点开弹层）；已登录显示有效期摘要 + 「退出登录」。
+ * 有效期写"30 天内有效 / 3 天内有效"而不是精确时刻：那个时刻是客户端按服务端 TTL 推算的，
+ * 显示成精确时间会让人以为它是权威值（真正的判定在服务端）。
+ *
+ * "服务端未设置密码"的提示放在这里而不是弹层里：登录弹层关掉就看不到了，
+ * 而这条提示是"安全性建议"，应该在设置页一直留着。
+ */
+@Composable
+private fun AccountCard(
+    state: HomeUiState,
+    onLogin: () -> Unit,
+    onLogout: () -> Unit,
+) {
+    val colors = AppTheme.colors
+    val metrics = AppTheme.metrics
+
+    AppCard {
+        Text(text = "账号", color = colors.textFaint, fontSize = metrics.fontCaption)
+        Spacer(modifier = Modifier.height(metrics.spacingXs))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = state.authSummary,
+                color = colors.textPrimary,
+                fontSize = metrics.fontSubtitle,
+                modifier = Modifier.weight(1f),
+            )
+            if (state.auth.loggedIn) {
+                AppPillButton(
+                    text = "退出登录",
+                    onClick = onLogout,
+                    variant = PillVariant.Secondary,
+                    size = PillSize.Compact,
+                )
+            } else {
+                AppPillButton(
+                    text = "登录",
+                    onClick = onLogin,
+                    size = PillSize.Compact,
+                )
+            }
+        }
+        if (state.auth.noPassword) {
+            Spacer(modifier = Modifier.height(metrics.spacingXs))
+            Text(
+                text = "这台服务器还没有设置访问密码，任何人都能直接进入，建议尽快在服务端设置",
+                color = colors.textFaint,
+                fontSize = metrics.fontMicro,
+            )
+        }
+    }
+}

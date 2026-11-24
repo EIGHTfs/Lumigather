@@ -18,8 +18,10 @@ package com.eightfs.lumigather.data
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import java.util.concurrent.TimeUnit
 
 // Content-Type 头名，取它来判断媒体地址是不是图片（自检与后续收藏功能都要看这个）。
@@ -41,6 +43,36 @@ class OkHttpHttpTransport(
         timeoutMs: Long
     ): HttpRawResponse = withContext(Dispatchers.IO) {
         executeBlocking(url, query, timeoutMs)
+    }
+
+    override suspend fun post(
+        url: String,
+        body: String,
+        contentType: String,
+        headers: Map<String, String>,
+        timeoutMs: Long,
+    ): HttpRawResponse = withContext(Dispatchers.IO) {
+        executePostBlocking(url, body, contentType, headers, timeoutMs)
+    }
+
+    // 写请求：body 由调用方序列化好（登录那边用 JSONObject 拼，密码里的引号会被正确转义），
+    // 这里只负责按指定 Content-Type 发出去，并把额外请求头（如 Bearer token）带上。
+    private fun executePostBlocking(
+        url: String,
+        body: String,
+        contentType: String,
+        headers: Map<String, String>,
+        timeoutMs: Long,
+    ): HttpRawResponse {
+        val requestBuilder = Request.Builder()
+            .url(url)
+            .post(body.toRequestBody(contentType.toMediaTypeOrNull()))
+        headers.forEach { (name, value) -> requestBuilder.header(name, value) }
+
+        callWithTimeout(timeoutMs).newCall(requestBuilder.build()).execute().use { response ->
+            val bodyText = response.body?.string().orEmpty()
+            return HttpRawResponse(response.code, bodyText, response.header(HEADER_CONTENT_TYPE))
+        }
     }
 
     private fun executeBlocking(

@@ -55,6 +55,12 @@ private object Field {
 
     // 后端在部分失败路径上会回 {"error": "..."}，见 ApiClient 的 200 包装错误处理。
     const val ERROR = "error"
+
+    // 登录响应：{ok, token, cookieName, noPassword?, message?}
+    const val TOKEN = "token"
+    const val COOKIE_NAME = "cookieName"
+    const val NO_PASSWORD = "noPassword"
+    const val MESSAGE = "message"
 }
 
 internal fun parseSiteConfig(json: JSONObject): SiteConfig = SiteConfig(
@@ -120,6 +126,20 @@ internal fun parseServerStatus(json: JSONObject): ServerStatus = ServerStatus(
 
 // 顶层 {"error": "..."} 的抽取：失败路径也要能拿到服务端给的原因（如 ENOENT 原文）供日志。
 internal fun extractServerError(json: JSONObject): String = json.optString(Field.ERROR, "")
+
+/**
+ * 登录响应 → 会话模型。
+ *
+ * [remember] 取的是"这次请求带的参数"而不是响应字段：服务端不回显它，
+ * 而客户端的有效期推算必须与这次请求一致（勾了就 30 天、没勾就 3 天）。
+ */
+internal fun parseLoginSession(json: JSONObject, remember: Boolean): LoginSession = LoginSession(
+    token = json.optString(Field.TOKEN, ""),
+    cookieName = json.optString(Field.COOKIE_NAME, ""),
+    noPassword = json.optBoolean(Field.NO_PASSWORD, false),
+    message = json.optString(Field.MESSAGE, ""),
+    remember = remember,
+)
 
 // 数组缺失（null）时返回空列表：降级响应里整个数组都可能不存在。
 private fun JSONArray?.toStringList(): List<String> {

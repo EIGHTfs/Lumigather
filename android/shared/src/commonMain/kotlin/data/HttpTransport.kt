@@ -17,6 +17,9 @@ const val DEFAULT_CONNECT_TIMEOUT_MS: Long = 10_000L
 // 整次请求的上限：服务端首次统计大目录要扫盘，实测最慢 3.4 秒，30 秒留足余量。
 const val DEFAULT_REQUEST_TIMEOUT_MS: Long = 30_000L
 
+// 写请求（登录/登出）的默认内容类型。服务端只认 application/json。
+const val JSON_CONTENT_TYPE: String = "application/json"
+
 // 十六进制字母表，用于百分号编码的两位输出。大写是 RFC 3986 的推荐形式。
 private const val HEX_DIGITS = "0123456789ABCDEF"
 
@@ -58,6 +61,24 @@ interface HttpTransport {
         query: Map<String, String> = emptyMap(),
         timeoutMs: Long = DEFAULT_REQUEST_TIMEOUT_MS
     ): HttpRawResponse
+
+    /**
+     * POST 请求（登录/登出这类"要提交东西"的接口用）。
+     *
+     * 默认实现直接抛：只有真正支持写请求的传输层（OkHttp）才实现它，
+     * 测试里的极简 GET 假实现不必被迫写一个用不到的方法 —— 真被调用时也会立刻暴露，
+     * 而不是静默拿一个空响应继续往下走。
+     *
+     * @param body 已经序列化好的请求体（JSON 文本），编码由调用方负责
+     * @param headers 额外请求头（如 `Authorization: Bearer <token>`）
+     */
+    suspend fun post(
+        url: String,
+        body: String,
+        contentType: String = JSON_CONTENT_TYPE,
+        headers: Map<String, String> = emptyMap(),
+        timeoutMs: Long = DEFAULT_REQUEST_TIMEOUT_MS,
+    ): HttpRawResponse = throw UnsupportedOperationException("该 HttpTransport 实现未提供 POST 能力")
 }
 
 /**

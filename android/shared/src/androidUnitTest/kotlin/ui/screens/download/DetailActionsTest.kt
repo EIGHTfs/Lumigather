@@ -50,7 +50,7 @@ private object UnusedTransport : HttpTransport {
 
 private val sampleImage = ImageItem(
     name = "Broyna.webp",
-    path = "/volume6/a/Broyna.webp",
+    path = "test-root/a/Broyna.webp",
     relativeUrl = "/api/media?file=%2Fvolume6%2Fa%2FBroyna.webp",
     sizeText = "137.2 KB",
     modifiedIso = "2024-04-21T10:00:00Z",
@@ -59,10 +59,27 @@ private val sampleImage = ImageItem(
 
 private fun holderWith(downloader: ImageDownloader): HomeStateHolder =
     HomeStateHolder(
-        clientFactory = { address -> ApiClient(address, UnusedTransport) },
+        clientFactory = { address, _ -> ApiClient(address, UnusedTransport) },
         addressStore = EmptyAddressStore(),
         imageDownloader = downloader,
+        authTokenStore = InMemoryAuthTokenStore(),
+        nowProvider = { 1_000_000L },
     )
+
+// 内存版 token 存储：本文件不测登录，但构造器要求提供
+private class InMemoryAuthTokenStore : com.eightfs.lumigather.data.AuthTokenStore {
+    private var stored: com.eightfs.lumigather.data.StoredAuthToken? = null
+
+    override fun read(): com.eightfs.lumigather.data.StoredAuthToken? = stored
+
+    override fun write(token: String, expiresAtEpochMs: Long) {
+        stored = com.eightfs.lumigather.data.StoredAuthToken(token, expiresAtEpochMs)
+    }
+
+    override fun clear() {
+        stored = null
+    }
+}
 
 class DetailActionsTest {
 
@@ -140,16 +157,17 @@ class DetailActionsTest {
     }
 
     @Test
-    fun favoriteOnlyShowsHintAndNeverTouchesDownloadOrSavedState() = runBlocking {
+    fun favoriteNeverTouchesDownloadOrSavedState() = runBlocking {
         val downloader = FakeImageDownloader(DownloadResult.Success)
         val holder = holderWith(downloader)
         holder.openDetail(sampleImage)
 
         holder.requestFavorite()
 
-        val hint = holder.state.actionHint
-        assertTrue(hint != null && hint.contains("登录"), "收藏应提示需要登录，实际：$hint")
-        // 关键约束：收藏占位不能产生任何"已收藏"痕迹，也不能顺带触发下载
+        // 登录底座上线后的契约：未登录点收藏 → 打开登录弹层（而不是只弹一句提示）
+        assertTrue(holder.state.loginSheetOpen, "未登录点收藏应弹出登录")
+        // 关键约束：收藏是占位，不能产生任何"已收藏"痕迹，也不能顺带触发下载
+        assertNull(holder.state.actionHint)
         assertEquals(0, downloader.callCount)
         assertEquals(DownloadUiState.Idle, holder.state.downloadState)
     }

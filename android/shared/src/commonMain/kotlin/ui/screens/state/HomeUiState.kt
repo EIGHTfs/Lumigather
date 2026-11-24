@@ -16,9 +16,14 @@ import com.eightfs.lumigather.data.ApiResult
 import com.eightfs.lumigather.data.CategoryView
 import com.eightfs.lumigather.data.DEFAULT_COUNT_CONCURRENCY
 import com.eightfs.lumigather.data.DEFAULT_PAGE_SIZE
+import com.eightfs.lumigather.data.DEFAULT_SESSION_HOURS
 import com.eightfs.lumigather.data.ImageItem
 import com.eightfs.lumigather.data.LumigatherRepository
 import com.eightfs.lumigather.data.PagedImages
+import com.eightfs.lumigather.data.StoredAuthToken
+import com.eightfs.lumigather.data.AuthTokenStore
+import com.eightfs.lumigather.data.currentEpochMillis
+import kotlinx.coroutines.delay
 import kotlin.coroutines.cancellation.CancellationException
 import ui.screens.download.DownloadResult
 import ui.screens.download.ImageDownloader
@@ -45,6 +50,31 @@ sealed class DownloadUiState {
     data class Done(val message: String) : DownloadUiState()
     data class Failed(val message: String) : DownloadUiState()
 }
+
+/**
+ * 登录弹层的状态。
+ *
+ * [Failed] 带的是**后端原文**（例如「密码错误」）：用户要看到的是"为什么不行"，
+ * 而不是我们翻译过一遍的笼统话术。拿不到后端文案时由状态层兜一句可操作的提示。
+ */
+sealed class LoginUiState {
+    data object Idle : LoginUiState()
+    data object Submitting : LoginUiState()
+    data class Failed(val message: String) : LoginUiState()
+}
+
+/**
+ * 本地登录态。
+ *
+ * [expiresAtEpochMs] 是客户端按服务端 TTL 推算的到期时刻；为 0 表示未登录。
+ * [noPassword] 记录"这台服务器还没设密码"，用来提示用户尽快设置（服务端会一直放行）。
+ */
+data class AuthUiState(
+    val loggedIn: Boolean = false,
+    val rememberDevice: Boolean = true,
+    val expiresAtEpochMs: Long = 0L,
+    val noPassword: Boolean = false,
+)
 
 /**
  * 整屏的完整状态。任何时刻界面都是它的一个纯函数。
@@ -90,6 +120,15 @@ data class HomeUiState(
     // 占位功能（收藏）的提示。与 downloadState 分开：收藏按设计就是不落地的，
     // 把它混进下载状态会让"下载失败"和"需要登录"共用一条通道，将来接入登录时更难拆。
     val actionHint: String? = null,
+    // ---- 登录（登录底座）----
+    val auth: AuthUiState = AuthUiState(),
+    val loginSheetOpen: Boolean = false,
+    val loginPassword: String = "",
+    // 「记住此设备」默认勾选：与网页版登录弹窗一致，也是绝大多数用户想要的
+    val loginRemember: Boolean = true,
+    val loginState: LoginUiState = LoginUiState.Idle,
+    // 失败后的冷却期（后端没有失败限流，前端用这个挡住连点）
+    val loginBlocked: Boolean = false,
 ) {
     // 左侧栏的可见分类：搜索框有内容时按展示名过滤，空查询不过滤。
     val visibleCategories: List<CategoryView>
@@ -114,6 +153,23 @@ data class HomeUiState(
             if (totalCount <= 0) return categoryName
             return "$categoryName · ${loadedCount}/${totalCount}"
         }
+
+    // 登录按钮可不可点：冷却中、提交中都不行；密码为空也不行 —— 除非这台服务器压根没设密码
+    // （那种情况下服务端会直接放行，逼用户乱填一个才奇怪）。三个条件缺一不可，
+    // 少了"冷却"就挡不住连点穷举，少了"密码为空"会让用户点了没反应。
+    val loginSubmittable: Boolean
+        get() = !loginBlocked &&
+            loginState !is LoginUiState.Submitting &&
+            (loginPassword.isNotEmpty() || auth.noPassword)
+
+    // 设置页「账号」块的一行摘要。有效期按勾选状态给"30 天/3 天"，不显示精确时间：
+    // 那个时刻是客户端推算的，显示成精确时间反而会让人以为很准。
+    val authSummary: String
+        get() = when {
+            !auth.loggedIn -> "未登录"
+            auth.rememberDevice -> "已登录 · 30 天内有效"
+            else -> "已登录 · 3 天内有效"
+        }
 }
 
 /**
@@ -126,9 +182,14 @@ data class HomeUiState(
  * 由这里统一重建，页面不必关心"什么时候该换"。
  */
 class HomeStateHolder(
-    private val clientFactory: (String) -> ApiClient,
+    // 造 ApiClient 的工厂。第二个参数是 401 回调：凭证失效是全局事实，
+    // 由 ApiClient 在统一位置回调一次，这里负责清 token + 提示重新登录。
+    private val clientFactory: (String, () -> Unit) -> ApiClient,
     private val addressStore: ServerAddressStore,
     private val imageDownloader: ImageDownloader,
+    private val authTokenStore: AuthTokenStore,
+    // 时钟可注入：测试要稳定构造"已过期 token"这种场景，不能依赖真实时间流逝
+    private val nowProvider: () -> Long = { currentEpochMillis() },
 ) {
 
     private val mutableState = mutableStateOf(HomeUiState())
@@ -156,6 +217,8 @@ class HomeStateHolder(
             enterSettingsMode(hasSavedAddress = false)
             return
         }
+        // 先恢复登录态：它只依赖本地存储与当前时间，与服务器是否可达无关
+        restoreAuthSession()
         attachRepository(savedAddress)
         refreshContent()
     }
@@ -198,7 +261,8 @@ class HomeStateHolder(
         }
 
         mutate { it.copy(addressError = null, testState = ConnectionTestState.Testing) }
-        val result = clientFactory(normalized).fetchStatus()
+        // 临时 client 也接 401 回调：连的可能是另一台服务器，凭证失效同样要清本地 token
+        val result = clientFactory(normalized, ::handleUnauthorized).fetchStatus()
         mutate { current ->
             current.copy(
                 testState = when (result) {
@@ -223,6 +287,9 @@ class HomeStateHolder(
         }
 
         addressStore.write(normalized)
+        // 换服务器必须清 token：旧 token 是上一台服务器签的，对新服务器一律无效，
+        // 留着它的唯一后果是之后每次带凭证的请求都 401，而用户完全看不出原因。
+        authTokenStore.clear()
         // 清掉旧地址的数据再重载：留着旧分类会让用户以为"新地址也是这些图"
         mutate {
             it.copy(
@@ -231,6 +298,10 @@ class HomeStateHolder(
                 addressDraft = normalized,
                 addressError = null,
                 testState = ConnectionTestState.Idle,
+                auth = AuthUiState(),
+                loginSheetOpen = false,
+                loginPassword = "",
+                loginState = LoginUiState.Idle,
                 categories = emptyList(),
                 images = emptyList(),
                 selectedImage = null,
@@ -373,7 +444,146 @@ class HomeStateHolder(
      * 等真正接登录时才发现以前的收藏一个都没有 —— 那比现在直接告诉他"还没开放"糟糕得多。
      */
     fun requestFavorite() {
-        mutate { it.copy(actionHint = "收藏需要先登录，该功能即将开放") }
+        // 本轮只改提示，不做任何"已收藏"状态切换：假状态会让用户以为存到了服务端。
+        // 未登录时先引导登录 —— 登录底座已经可用，收藏接口下一轮再接。
+        if (!state.auth.loggedIn) {
+            openLoginSheet()
+            return
+        }
+        mutate { it.copy(actionHint = "收藏功能即将开放") }
+    }
+
+    // ---- 登录底座 ----
+
+    /** 打开登录弹层：清空上次的密码与错误，避免把敏感内容留在界面上。 */
+    fun openLoginSheet() {
+        mutate {
+            it.copy(
+                loginSheetOpen = true,
+                loginPassword = "",
+                loginState = LoginUiState.Idle,
+                loginBlocked = false,
+                loginRemember = true,
+                actionHint = null,
+            )
+        }
+    }
+
+    fun closeLoginSheet() {
+        mutate { it.copy(loginSheetOpen = false, loginPassword = "", loginState = LoginUiState.Idle, loginBlocked = false) }
+    }
+
+    fun updateLoginPassword(password: String) {
+        // 改密码时顺手清掉错误提示：用户已经在改了，还挂着「密码错误」会让人以为没生效
+        mutate { it.copy(loginPassword = password, loginState = LoginUiState.Idle) }
+    }
+
+    fun toggleLoginRemember(remember: Boolean) {
+        mutate { it.copy(loginRemember = remember) }
+    }
+
+    /**
+     * 提交登录。
+     *
+     * 失败的处置有两件事：内联显示后端原文（如「密码错误」）+ 冷却 1.5 秒。
+     * 冷却放在这里而不是 UI：按钮只是表现，真正的闸门在状态层 —— 否则任何直接调用都能绕过。
+     */
+    suspend fun submitLogin() {
+        if (!state.loginSubmittable) return
+        val activeRepository = repository
+            ?: run {
+                mutate { it.copy(loginState = LoginUiState.Failed("请先配置服务器地址")) }
+                return
+            }
+
+        val password = state.loginPassword
+        val remember = state.loginRemember
+        mutate { it.copy(loginState = LoginUiState.Submitting) }
+
+        when (val result = activeRepository.login(password, remember)) {
+            is ApiResult.Ok -> {
+                val session = result.value
+                val expiresAt = session.expiresAt(nowProvider())
+                authTokenStore.write(session.token, expiresAt)
+                mutate {
+                    it.copy(
+                        loginSheetOpen = false,
+                        // 关掉弹层就把密码从内存里清掉，别让它留在状态里
+                        loginPassword = "",
+                        loginState = LoginUiState.Idle,
+                        loginBlocked = false,
+                        auth = AuthUiState(
+                            loggedIn = true,
+                            rememberDevice = remember,
+                            expiresAtEpochMs = expiresAt,
+                            noPassword = session.noPassword,
+                        ),
+                        actionHint = if (session.noPassword) {
+                            "服务端未设置密码，建议尽快设置"
+                        } else {
+                            "登录成功"
+                        },
+                    )
+                }
+            }
+
+            is ApiResult.Err -> {
+                mutate { it.copy(loginState = LoginUiState.Failed(describeLoginFailure(result.error)), loginBlocked = true) }
+                // 冷却：后端没有失败限流/锁定，前端必须自己挡住连点穷举
+                delay(FAILED_LOGIN_COOLDOWN_MS)
+                mutate { it.copy(loginBlocked = false) }
+            }
+        }
+    }
+
+    /** 退出登录：先尽力通知服务端，再无条件清本地 —— 本地退不掉会把用户困在登录态。 */
+    suspend fun logout() {
+        val token = authTokenStore.read()?.token.orEmpty()
+        repository?.logout(token)
+        clearAuthSession()
+        mutate { it.copy(actionHint = "已退出登录") }
+    }
+
+    // 读本地会话：过期/格式异常一律当未登录，并把坏数据清掉（避免每次启动都带着坏值）
+    private fun restoreAuthSession() {
+        val stored = authTokenStore.read()
+        if (stored == null) {
+            mutate { it.copy(auth = AuthUiState()) }
+            return
+        }
+        if (stored.isExpired(nowProvider())) {
+            authTokenStore.clear()
+            mutate { it.copy(auth = AuthUiState()) }
+            return
+        }
+        // 记住勾选状态无法从存储反推，用"剩余时间接近 30 天"判断当时勾没勾；
+        // 判错只影响摘要文案（30 天/3 天），不影响会话有效性。
+        val remainingHours = (stored.expiresAtEpochMs - nowProvider()) / MILLIS_PER_HOUR
+        mutate {
+            it.copy(
+                auth = AuthUiState(
+                    loggedIn = true,
+                    rememberDevice = remainingHours > DEFAULT_SESSION_HOURS,
+                    expiresAtEpochMs = stored.expiresAtEpochMs,
+                ),
+            )
+        }
+    }
+
+    /**
+     * 401 回调（ApiClient 在非登录请求收到 401 时调一次）。
+     *
+     * 必须"清 token + 明确提示"，不能静默：用户会以为是网络坏了，
+     * 然后反复点同一个按钮；其实只要重新登录就能恢复。
+     */
+    private fun handleUnauthorized() {
+        clearAuthSession()
+        mutate { it.copy(actionHint = "登录已过期，请重新登录") }
+    }
+
+    private fun clearAuthSession() {
+        authTokenStore.clear()
+        mutate { it.copy(auth = AuthUiState()) }
     }
 
     fun closeSidebars() {
@@ -406,7 +616,7 @@ class HomeStateHolder(
     // 地址变了才重建仓库：重复重建会白丢连接池与已缓存的分类。
     private fun attachRepository(address: String, forceRebuild: Boolean = false) {
         if (!forceRebuild && repository != null && activeAddress == address) return
-        repository = LumigatherRepository(clientFactory(address))
+        repository = LumigatherRepository(clientFactory(address, ::handleUnauthorized))
         activeAddress = address
     }
 
@@ -445,7 +655,14 @@ class HomeStateHolder(
         val activeRepository = repository ?: return
         when (val result = activeRepository.loadStatus()) {
             is ApiResult.Ok -> mutate {
-                it.copy(online = result.value.ok, serverVersion = result.value.version)
+                // needsSetup 由服务端判定（它才知道有没有 passwordHash）。
+                // 用它刷新 noPassword 标记，是为了让"这台服务器没设密码"的提醒在重启后依然成立 ——
+                // 只靠登录响应里的那个字段的话，重开应用提示就消失了。
+                it.copy(
+                    online = result.value.ok,
+                    serverVersion = result.value.version,
+                    auth = it.auth.copy(noPassword = result.value.needsSetup),
+                )
             }
 
             is ApiResult.Err -> mutate { it.copy(online = false) }
@@ -510,4 +727,21 @@ class HomeStateHolder(
             }
         }
     }
+}
+
+// 失败后的冷却时长：后端没有失败限流/锁定，1.5 秒是"能挡住连点穷举、又不至于让人觉得卡死"的折中。
+private const val FAILED_LOGIN_COOLDOWN_MS = 1_500L
+
+// 小时 → 毫秒，用于把本地保存的到期时刻换算成"剩余几小时"来判断当时勾没勾记住
+private const val MILLIS_PER_HOUR = 3_600_000L
+
+/**
+ * 把登录失败翻译成一句能上屏的中文。
+ *
+ * 优先用服务端原文（例："密码错误"）：用户需要知道是密码错、还是根本没连上服务器。
+ * 服务端没给文案时（例如 500、网关错误）退回数据层已经写好的中文 userMessage。
+ */
+private fun describeLoginFailure(error: ApiError): String {
+    if (error is ApiError.Http && error.serverMessage.isNotBlank()) return error.serverMessage
+    return error.userMessage
 }

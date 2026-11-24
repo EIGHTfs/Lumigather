@@ -18,7 +18,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.withFrameNanos
 import com.eightfs.lumigather.data.ApiClient
+import com.eightfs.lumigather.data.AuthTokenStore
 import com.eightfs.lumigather.data.HttpTransport
+import com.eightfs.lumigather.data.createAuthTokenStore
+import com.eightfs.lumigather.data.currentEpochMillis
 import com.tencent.kuikly.compose.BackHandler
 import com.tencent.kuikly.compose.ComposeContainer
 import com.tencent.kuikly.compose.foundation.background
@@ -42,6 +45,7 @@ import kotlinx.coroutines.launch
 import theme.AppTheme
 import theme.LumigatherTheme
 import theme.ThemeMode
+import ui.screens.auth.LoginSheet
 import ui.screens.download.ImageDownloader
 import ui.screens.download.createImageDownloader
 import ui.screens.main.HomeScreen
@@ -134,6 +138,8 @@ fun AppRoot(
         onRememberChange = stateHolder::toggleLoginRemember,
         onSubmit = { scope.launch { stateHolder.submitLogin() } },
         onDismiss = stateHolder::closeLoginSheet,
+        // 服务端没设密码时，弹层要告诉用户"空密码也能登"，否则会对着输入框猜该填什么
+        noPasswordServer = state.auth.noPassword,
     )
 }
 
@@ -306,10 +312,16 @@ class LumigatherHomePage : ComposeContainer() {
             val addressStore = remember { createServerAddressStore() }
             // 相册下载器同样只需一份：它内部持有自己的线程池与查重逻辑
             val imageDownloader = remember { createImageDownloader() }
+            // 会话 token 存储：与地址同一个 SharedPreferences 文件，键分开
+            val authTokenStore = remember { createAuthTokenStore() }
             // 工厂必须 remember：lambda 每次重组都是新对象，会让 stateHolder 跟着重建、
             // bootstrap 反复重跑（表现是首屏反复转圈）。
-            val clientFactory: (String) -> ApiClient = remember(transport) {
-                { address -> ApiClient(address, transport) }
+            // 第二个参数把 401 回调接到 ApiClient 上：凭证失效在数据层统一拦截一次，
+            // 各调用点不必自己判 401。
+            val clientFactory: (String, () -> Unit) -> ApiClient = remember(transport) {
+                { address, onUnauthorized ->
+                    ApiClient(address, transport, onUnauthorized = onUnauthorized)
+                }
             }
 
             LumigatherTheme(mode = ThemeMode.Light) {
@@ -317,6 +329,7 @@ class LumigatherHomePage : ComposeContainer() {
                     clientFactory = clientFactory,
                     addressStore = addressStore,
                     imageDownloader = imageDownloader,
+                    authTokenStore = authTokenStore,
                 )
             }
         }

@@ -22,6 +22,27 @@ private const val ENDPOINT_SITE_CONFIG = "/lumigather"
 private const val ENDPOINT_DIRECTORIES = "/directories"
 private const val ENDPOINT_IMAGES = "/images"
 private const val ENDPOINT_STATUS = "/status"
+private const val ENDPOINT_LOGIN = "/login"
+private const val ENDPOINT_LOGOUT = "/logout"
+
+// 登录请求体的字段名（与后端 readBody 后取的键逐字一致）
+private const val BODY_PASSWORD = "password"
+private const val BODY_REMEMBER = "remember"
+
+// 登出没有请求体语义，但后端要求 POST；发一个空 JSON 对象最省事且合法。
+private const val EMPTY_JSON_BODY = "{}"
+
+// 会话 token 的请求头。后端 extractToken 先看 cookie、再看 `Authorization: Bearer <token>`，
+// 原生端没有 cookie 罐子，所以直接走 Bearer。
+private const val HEADER_AUTHORIZATION = "Authorization"
+private const val BEARER_PREFIX = "Bearer "
+
+// 401：会话无效/未登录。读数接口目前免鉴权，这个分支主要给"将来要鉴权的接口"兜底，
+// 以及把"过期就清 token"这件事集中在唯一一处。
+private const val HTTP_UNAUTHORIZED = 401
+
+// 401 但服务端没给原因时的兜底文案（可直接上屏）
+private const val MESSAGE_SESSION_EXPIRED = "登录已过期，请重新登录"
 
 // 查询参数名。参数名必须与后端逐字一致，写错了后端不会报错（见文件头第 1 条）。
 private const val QUERY_ROOT = "root"
@@ -46,7 +67,15 @@ private const val RECURSIVE_FALSE = "false"
 class ApiClient(
     rawBaseUrl: String,
     private val transport: HttpTransport,
-    private val requestTimeoutMs: Long = DEFAULT_REQUEST_TIMEOUT_MS
+    private val requestTimeoutMs: Long = DEFAULT_REQUEST_TIMEOUT_MS,
+    /**
+     * 401 回调：任何**非登录**请求收到 401 时触发一次。
+     *
+     * 放在这一层而不是各调用点：凭证失效是全局事实，每个调用点都自己判 401 一定会漏；
+     * 而登录请求自己的 401 是"密码错"，不能当会话过期处理，所以由调用方用
+     * `isAuthAttempt = true` 显式排除。
+     */
+    private val onUnauthorized: () -> Unit = {},
 ) {
     // 归一化后保存：末尾斜杠留着的后果是拼出 "http://h:8081//api/status"，
     // 部分服务端会把它当不同路径直接 404。
@@ -95,6 +124,80 @@ class ApiClient(
     suspend fun fetchStatus(): ApiResult<ServerStatus> =
         getJson(ENDPOINT_STATUS, emptyMap(), ::parseServerStatus)
 
+    /**
+     * POST /api/login：用访问密码换会话 token。
+     *
+     * 三种响应都按后端契约处理：
+     * - `200 {ok:true, token, cookieName}` → 登录成功
+     * - `200 {ok:true, noPassword:true, token, ...}` → 服务端还没设密码，视为成功但要提示（见 noPassword）
+     * - `401 {ok:false, error:"密码错误"}` → 凭证错误，走普通 Http 错误返回
+     *
+     * 密码不进任何日志：请求体用 JSONObject 拼好后直接交给传输层，
+     * 全程没有把 password 插进异常信息、错误对象或字符串模板的地方。
+     */
+    suspend fun login(password: String, remember: Boolean): ApiResult<LoginSession> {
+        if (!isConfigured) return ApiResult.Err(ApiError.InvalidConfig("baseUrl 为空"))
+        // 刻意不在这里拦"密码为空"：服务端可能根本没设密码（noPassword 场景下随便填都能登录），
+        // 客户端拦空会让这种服务器永远登不进去。由 UI 决定什么时候允许空提交，服务端决定对不对。
+
+        val requestBody = JSONObject()
+            .put(BODY_PASSWORD, password)
+            .put(BODY_REMEMBER, remember)
+            .toString()
+
+        val raw = try {
+            transport.post(
+                url = baseUrl + API_PREFIX + ENDPOINT_LOGIN,
+                body = requestBody,
+                timeoutMs = requestTimeoutMs,
+            )
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Throwable) {
+            return ApiResult.Err(ApiError.Network(describeFailure(failure), failure))
+        }
+
+        val session = when (val parsed = interpret(raw, { parseLoginSession(it, remember) }, isAuthAttempt = true)) {
+            is ApiResult.Ok -> parsed.value
+            is ApiResult.Err -> return parsed
+        }
+        // 防御：后端说成功却没给 token，等于拿到一个用不了的会话。
+        // 当解析失败处理，比"登录成功然后下一次请求 401"好查得多。
+        if (session.token.isBlank()) {
+            return ApiResult.Err(ApiError.Parse("登录响应缺少 token", bodySnippet(raw.bodyText)))
+        }
+        return ApiResult.Ok(session)
+    }
+
+    /**
+     * POST /api/logout：尽力通知服务端销毁会话。
+     *
+     * 刻意不走 [interpret]：登出失败（401/500/断网）都不该触发 onUnauthorized，
+     * 也不该让本地登不出去 —— 调用方无论如何都会清本地 token，否则用户会被困在登录态里。
+     */
+    suspend fun logout(token: String): ApiResult<Unit> {
+        if (!isConfigured) return ApiResult.Err(ApiError.InvalidConfig("baseUrl 为空"))
+        if (token.isBlank()) return ApiResult.Ok(Unit)
+
+        val raw = try {
+            transport.post(
+                url = baseUrl + API_PREFIX + ENDPOINT_LOGOUT,
+                body = EMPTY_JSON_BODY,
+                headers = mapOf(HEADER_AUTHORIZATION to BEARER_PREFIX + token),
+                timeoutMs = requestTimeoutMs,
+            )
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Throwable) {
+            return ApiResult.Err(ApiError.Network(describeFailure(failure), failure))
+        }
+        return if (raw.statusCode in HTTP_SUCCESS_RANGE) {
+            ApiResult.Ok(Unit)
+        } else {
+            ApiResult.Err(ApiError.Http(raw.statusCode, ""))
+        }
+    }
+
     // 相对地址 → 绝对地址；已是绝对地址则原样返回。
     fun resolveUrl(relativeOrAbsolute: String): String = joinUrl(baseUrl, relativeOrAbsolute)
 
@@ -123,11 +226,24 @@ class ApiClient(
         return interpret(raw, parse)
     }
 
-    private fun <T> interpret(raw: HttpRawResponse, parse: (JSONObject) -> T): ApiResult<T> {
+    /**
+     * @param isAuthAttempt 这次请求本身就是"验证凭证"（登录）。为 true 时 401 只当普通失败返回，
+     *                      不触发 [onUnauthorized] —— 密码输错不该被当成"会话过期"去清别人的登录态。
+     */
+    private fun <T> interpret(
+        raw: HttpRawResponse,
+        parse: (JSONObject) -> T,
+        isAuthAttempt: Boolean = false,
+    ): ApiResult<T> {
         // 先判状态码：非 2xx 时 body 往往不是 JSON（或虽是 JSON 但只有 error），不值得再解析一遍。
         if (raw.statusCode !in HTTP_SUCCESS_RANGE) {
             val serverMessage = runCatching { extractServerError(JSONObject(raw.bodyText)) }
                 .getOrDefault("")
+            if (raw.statusCode == HTTP_UNAUTHORIZED && !isAuthAttempt) {
+                // 凭证失效是全局事实：在这里统一通知上层清 token，各调用点不必各自判 401。
+                onUnauthorized()
+                return ApiResult.Err(ApiError.Http(HTTP_UNAUTHORIZED, serverMessage.ifBlank { MESSAGE_SESSION_EXPIRED }))
+            }
             return ApiResult.Err(ApiError.Http(raw.statusCode, serverMessage))
         }
 

@@ -13,7 +13,9 @@ import android.content.Context
 import java.lang.ref.WeakReference
 
 // 配置文件与键名。改这两个字符串等于让已安装用户的地址失效，改动前必须想清楚迁移。
-private const val PREFERENCES_NAME = "lumigather_settings_v1"
+// 文件名用 internal 而不是 private：登录态（AuthTokenStore）与它共用同一个设置文件，
+// 两处各写一份字面量迟早会漂移，"一处清理、另一处还在读旧文件"是最难查的一类残留。
+internal const val SETTINGS_PREFERENCES_NAME = "lumigather_settings_v1"
 private const val KEY_SERVER_ADDRESS = "server_base_url"
 
 /**
@@ -52,7 +54,7 @@ private class SharedPreferencesServerAddressStore(
 ) : ServerAddressStore {
 
     private val preferences
-        get() = context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
+        get() = context.getSharedPreferences(SETTINGS_PREFERENCES_NAME, Context.MODE_PRIVATE)
 
     override fun read(): String = preferences.getString(KEY_SERVER_ADDRESS, "").orEmpty()
 
