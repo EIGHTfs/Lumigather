@@ -43,6 +43,8 @@ fun CategoryBlock(
         title = label.ifBlank { name },
         modifier = modifier,
         selected = selected,
+        // 选中信号交给尾部胶囊变主色，不再额外挂圆点（避免同一行两处重复强调）
+        showSelectionDot = false,
         onClick = onClick,
         // 色标用 6dp 小圆点而不是色块：分类名才是信息主体，色块会把视线抢走
         leading = {
@@ -54,7 +56,13 @@ fun CategoryBlock(
             )
         },
         // 张数走尾部插槽（而不是 value 参数的裸文字）：需要固定宽度的胶囊才能右侧对齐
-        trailing = { CountBadge(countState = countState, imageCount = imageCount) },
+        trailing = {
+            CountBadge(
+                countState = countState,
+                imageCount = imageCount,
+                highlighted = selected,
+            )
+        },
     )
 }
 
@@ -66,20 +74,26 @@ fun CategoryBlock(
  * 左右边界都成为直线，代价只是短数字周围多一点留白。
  */
 @Composable
-private fun CountBadge(countState: CountState, imageCount: Int) {
+private fun CountBadge(countState: CountState, imageCount: Int, highlighted: Boolean = false) {
     val colors = AppTheme.colors
     val metrics = AppTheme.metrics
 
     val text = badgeText(countState, imageCount) ?: return
     // 数字用次要色、占位符用更弱的 ghost 色：一眼能分出「这是真数字」和「还在算/没算出来」
-    val textColor = if (countState == CountState.READY) colors.textSecondary else colors.textGhost
+    // 选中行整块胶囊换成主色：这是该行唯一的选中信号，对比度也足够。
+    val background = if (highlighted) colors.primary else colors.container
+    val textColor = when {
+        highlighted -> colors.onPrimary
+        countState == CountState.READY -> colors.textSecondary
+        else -> colors.textGhost
+    }
 
     Box(
         modifier = Modifier
             .width(metrics.widthCountBadge)
             .height(metrics.heightCountBadge)
             .clip(RoundedCornerShape(metrics.radiusPill))
-            .background(colors.container),
+            .background(background),
         contentAlignment = Alignment.Center,
     ) {
         Text(

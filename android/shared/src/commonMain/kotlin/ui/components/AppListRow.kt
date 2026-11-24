@@ -41,6 +41,10 @@ fun AppListRow(
     modifier: Modifier = Modifier,
     subtitle: String? = null,
     selected: Boolean = false,
+    // 选中圆点开关：默认保留（属于该组件的既定视觉），
+    // 但当调用方已有更强的选中信号（例如尾部胶囊整块变主色）时，
+    // 再挂一个圆点就是重复强调 —— 由调用方关掉。
+    showSelectionDot: Boolean = true,
     enabled: Boolean = true,
     onClick: (() -> Unit)? = null,
     leading: (@Composable () -> Unit)? = null,
@@ -81,7 +85,7 @@ fun AppListRow(
             value != null -> Text(text = value, color = colors.textSecondary, fontSize = metrics.fontSubtitle)
         }
 
-        if (selected) {
+        if (selected && showSelectionDot) {
             Spacer(modifier = Modifier.width(metrics.spacingSm))
             Box(
                 modifier = Modifier
