@@ -52,6 +52,8 @@ fun HomeScreen(
     onRetry: () -> Unit,
     onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier,
+    // 侧栏拖动由 AppRoot 构造后传进来，挂到网格区（避免抢顶部 chip 条的横向滚动）
+    gridGestureModifier: Modifier = Modifier,
 ) {
     val colors = AppTheme.colors
 
@@ -69,7 +71,7 @@ fun HomeScreen(
         CategoryChipsRow(state = state, onSelectCategory = onSelectCategory)
 
         // weight(1f)：网格吃掉顶栏与底栏之外的全部高度，翻页与滚动都在这块里发生
-        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+        Box(modifier = Modifier.weight(1f).fillMaxWidth().then(gridGestureModifier)) {
             HomeContent(
                 state = state,
                 onOpenImage = onOpenImage,

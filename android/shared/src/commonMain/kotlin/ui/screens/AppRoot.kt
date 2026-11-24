@@ -67,21 +67,26 @@ const val HOME_PAGE_NAME = "LumigatherHome"
 expect fun createDefaultHttpTransport(): HttpTransport
 
 /**
- * 根组合：状态在设置态就画设置界面，否则画三栏骨架。
+ * 根组合：状态在设置态就画设置界面，否则画三栏骨架；登录弹层在两种状态下都能弹出来。
  *
- * @param clientFactory   按地址造 ApiClient。改地址后需要换掉整个 ApiClient，所以传工厂而不是实例
+ * @param clientFactory   按地址造 ApiClient（第二个参数是 401 回调）。改地址后需要换掉整个
+ *                        ApiClient，所以传工厂而不是实例
  * @param addressStore    地址持久化入口（真机上是 SharedPreferences）
  * @param imageDownloader 存相册能力（真机上是 MediaStore 实现）。注入而不是页面自己 new，
  *                        是为了让"下载成功/失败"能在状态层被测到，不必真的往相册写文件
+ * @param authTokenStore  会话 token 持久化入口（真机上与地址共用同一个 SharedPreferences 文件）
+ * @param nowProvider     时钟（注入以便测试构造"token 已过期"）
  */
 @Composable
 fun AppRoot(
-    clientFactory: (String) -> ApiClient,
+    clientFactory: (String, () -> Unit) -> ApiClient,
     addressStore: ServerAddressStore,
     imageDownloader: ImageDownloader,
+    authTokenStore: AuthTokenStore,
     modifier: Modifier = Modifier,
-    stateHolder: HomeStateHolder = remember(clientFactory, addressStore, imageDownloader) {
-        HomeStateHolder(clientFactory, addressStore, imageDownloader)
+    nowProvider: () -> Long = { currentEpochMillis() },
+    stateHolder: HomeStateHolder = remember(clientFactory, addressStore, imageDownloader, authTokenStore) {
+        HomeStateHolder(clientFactory, addressStore, imageDownloader, authTokenStore, nowProvider)
     },
 ) {
     val scope = rememberCoroutineScope()
@@ -89,7 +94,7 @@ fun AppRoot(
     // 读 state 的字段即订阅：任何 mutate 都会让下面重画
     val state = stateHolder.state
 
-    // 启动链路只跑一次：读地址 →（没配就进设置态）分类 → 第一页 → 后台补张数
+    // 启动链路只跑一次：读地址 → 恢复登录态 →（没配就进设置态）分类 → 第一页 → 后台补张数
     LaunchedEffect(stateHolder) { stateHolder.bootstrap() }
 
     registerBackHandling(state = state, stateHolder = stateHolder)
@@ -100,35 +105,54 @@ fun AppRoot(
             onAddressChange = stateHolder::updateAddressDraft,
             onTestConnection = { scope.launch { stateHolder.testAddress() } },
             onSave = { scope.launch { stateHolder.saveAddress() } },
+            onLogin = stateHolder::openLoginSheet,
+            onLogout = { scope.launch { stateHolder.logout() } },
             onClose = stateHolder::closeSettings,
             modifier = modifier,
         )
-        return
+    } else {
+        // 下载用 AppRoot 自己的作用域而不是 MainScaffold 的：下载是一次有副作用的写文件动作，
+        // 半路被取消会留下未完成的相册条目。而 MainScaffold 会随"进设置界面"被移出组合，
+        // 用它自己的作用域就等于把"用户点开设置"变成"取消下载"。
+        MainScaffold(
+            state = state,
+            stateHolder = stateHolder,
+            downloadScope = scope,
+            modifier = modifier,
+        )
     }
 
-    // 下载用 AppRoot 自己的作用域而不是 MainScaffold 的：下载是一次有副作用的写文件动作，
-    // 半路被取消会留下未完成的相册条目。而 MainScaffold 会随"进设置界面"被移出组合，
-    // 用它自己的作用域就等于把"用户点开设置"变成"取消下载"。
-    MainScaffold(
-        state = state,
-        stateHolder = stateHolder,
-        downloadScope = scope,
-        modifier = modifier,
+    // 登录弹层放在两种界面**之外**：设置页的「登录」与详情页的「收藏」都会打开它，
+    // 放进去任何一个分支里都会漏掉另一种入口。
+    LoginSheet(
+        visible = state.loginSheetOpen,
+        password = state.loginPassword,
+        rememberDevice = state.loginRemember,
+        loginState = state.loginState,
+        canSubmit = state.loginSubmittable,
+        onPasswordChange = stateHolder::updateLoginPassword,
+        onRememberChange = stateHolder::toggleLoginRemember,
+        onSubmit = { scope.launch { stateHolder.submitLogin() } },
+        onDismiss = stateHolder::closeLoginSheet,
     )
 }
 
 /**
  * 返回键分级处理。
  *
- * 规则：设置界面（且已有旧配置）→ 退回主界面；侧栏开着 → 收起侧栏；都没有 → 什么都不注册。
+ * 规则：登录弹层开着 → 关弹层；设置界面（且已有旧配置）→ 退回主界面；侧栏开着 → 收起侧栏；
+ * 都没有 → 什么都不注册。
  *
  * 为什么"没有就不注册"是硬要求：Kuikly 判断一次返回是否被消费，依据是页面返回回调列表是否非空
  * （Pager 收到 back 事件时先看 getBackPressHandler().backPressCallbackList，非空才回
  * consumed=1 并分发给我们）。常驻注册会让每次返回都被消费，用户就再也退不出应用。
+ *
+ * 顺序也是要求：弹层盖在最上面，返回就该先关它，而不是把底下的设置页退掉。
  */
 @Composable
 private fun registerBackHandling(state: HomeUiState, stateHolder: HomeStateHolder) {
     when {
+        state.loginSheetOpen -> BackHandler { stateHolder.closeLoginSheet() }
         state.settingsOpen && state.hasSavedAddress -> BackHandler { stateHolder.closeSettings() }
         state.settingsOpen -> Unit
         state.leftSidebarOpen || state.rightSidebarOpen -> BackHandler { stateHolder.closeSidebars() }
@@ -158,6 +182,20 @@ private fun MainScaffold(
     // 任一侧栏打开都要把主界面推开并压暗，所以取两者的较大值作为"整体打开程度"。
     val openProgress = if (leftProgress > rightProgress) leftProgress else rightProgress
 
+    // 侧栏跟手拖动：挂在网格区而不是整屏。
+    // 挂整屏会把顶部 chip 条（LazyRow）的横向滚动一起吃掉 —— 它滚不动，用户就选不了分类。
+    val gridDragModifier = Modifier.sidebarDragGesture(
+        enabled = !state.leftSidebarOpen && !state.rightSidebarOpen,
+        onLeftProgress = { leftDragProgress = it },
+        onRightProgress = { rightDragProgress = it },
+        onCommitLeft = { stateHolder.openLeftSidebar() },
+        onCommitRight = { stateHolder.openRightSidebar() },
+        onDragFinished = {
+            leftDragProgress = null
+            rightDragProgress = null
+        },
+    )
+
     Box(
         modifier = modifier
             .fillMaxSize()
@@ -173,59 +211,10 @@ private fun MainScaffold(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                // 跟手拖动：整块主界面参与，方向决定开哪一侧（右滑开左栏 / 左滑开右栏）。
-                // 不做「起手必须落在边缘」的限制 —— 那是为了一条窄热区做的妥协；既然整块
-                // 界面都参与，起手位置就不该再限制，否则手感会像「要先瞄准」。
-                // 拖动过程中把手指位移直接写进 dragProgress（侧栏贴着手指走），松手才吸附。
-                // key 带上侧栏状态：闭包要读最新值，状态变化时重建一次即可（那时手势已结束）。
-                .pointerInput(state.leftSidebarOpen, state.rightSidebarOpen) {
-                    val sidebarWidthPx = HomeLayout.sidebarWidth.toPx()
-                    // 0=还没决定方向 1=拖左栏 2=拖右栏。方向在第一次移动时定下，全程不变。
-                    var draggingSide = 0
-                    var accumulated = 0f
-                    detectHorizontalDragGestures(
-                        onDragStart = {
-                            draggingSide = 0
-                            accumulated = 0f
-                        },
-                        onDragEnd = {
-                            // 松手吸附：拖过栏宽 1/3 就全开，否则回弹。
-                            // 左右用同一个比例，手感才对称。
-                            val commitDistance = sidebarWidthPx / SIDEBAR_COMMIT_FRACTION
-                            when {
-                                draggingSide == 1 && accumulated > commitDistance ->
-                                    stateHolder.openLeftSidebar()
-                                draggingSide == 2 && accumulated < -commitDistance ->
-                                    stateHolder.openRightSidebar()
-                                draggingSide != 0 -> stateHolder.closeSidebars()
-                                else -> Unit
-                            }
-                            // 交还控制权给吸附动画：先清掉拖动值，让 animatedProgress 从
-                            // 松开时的位置接着走，视觉上不会跳。
-                            leftDragProgress = null
-                            rightDragProgress = null
-                            draggingSide = 0
-                        },
-                        onDragCancel = {
-                            leftDragProgress = null
-                            rightDragProgress = null
-                            draggingSide = 0
-                        },
-                        onHorizontalDrag = { _, dragAmount ->
-                            accumulated += dragAmount
-                            if (draggingSide == 0) {
-                                draggingSide = if (dragAmount > 0f) 1 else if (dragAmount < 0f) 2 else 0
-                            }
-                            // 进度 = 已拖距离 / 栏宽，钳在 0..1。这就是「跟手」：
-                            // 拖到一半松手，侧栏就停在一半的位置往回弹或往前吸。
-                            if (draggingSide == 1) {
-                                leftDragProgress = (accumulated / sidebarWidthPx).coerceIn(0f, 1f)
-                            } else if (draggingSide == 2) {
-                                rightDragProgress = (-accumulated / sidebarWidthPx).coerceIn(0f, 1f)
-                            }
-                        },
-                    )
-                }
+                // 侧栏拖动**不挂在这一层**：这一层覆盖整个主界面，会把顶部 chip 条的
+                // 横向滚动一起吃掉（Kuikly 的 detectHorizontalDragGestures 用
+                // awaitFirstDown(requireUnconsumed=false) + consume()，子组件收不到事件）。
+                // 改为下沉到 HomeScreen 的网格区，见下方 gridGestureModifier。
                 .graphicsLayer {
                     val scale = 1f - HomeLayout.mainScaleDelta * openProgress
                     scaleX = scale
@@ -242,6 +231,7 @@ private fun MainScaffold(
         ) {
             HomeScreen(
                 state = state,
+                gridGestureModifier = gridDragModifier,
                 onOpenLeftSidebar = stateHolder::openLeftSidebar,
                 onSelectCategory = { categoryName -> scope.launch { stateHolder.selectCategory(categoryName) } },
                 onOpenImage = stateHolder::openDetail,
@@ -394,4 +384,65 @@ private fun animatedProgress(open: Boolean, dragProgress: Float?): Float {
 private fun easeOutCubic(progress: Float): Float {
     val remaining = 1f - progress
     return 1f - remaining * remaining * remaining
+}
+
+/**
+ * 侧栏跟手拖动手势（挂在网格区，不挂整屏）。
+ *
+ * 为什么不挂整屏：Kuikly 的 detectHorizontalDragGestures 内部用
+ * awaitFirstDown(requireUnconsumed = false) 并在 slop 通过后 consume() 事件，
+ * 父层挂载会连子组件（顶部 chip 条 LazyRow）的横向滚动一起吃掉。
+ * 下沉到网格区后，顶栏/chip 条/底部状态栏的横向交互都不受影响。
+ *
+ * 松手吸附的分界是栏宽的 1/3：拖过就全开，否则回弹。
+ */
+private fun Modifier.sidebarDragGesture(
+    enabled: Boolean,
+    onLeftProgress: (Float?) -> Unit,
+    onRightProgress: (Float?) -> Unit,
+    onCommitLeft: () -> Unit,
+    onCommitRight: () -> Unit,
+    onDragFinished: () -> Unit,
+): Modifier = this.pointerInput(enabled) {
+    // 侧栏已经开着时不接管：那时横向拖动应当交给侧栏内部（列表滚动等）。
+    if (!enabled) return@pointerInput
+
+    val sidebarWidthPx = HomeLayout.sidebarWidth.toPx()
+    // 0=还没决定方向 1=拖左栏 2=拖右栏。方向在第一次移动时定下，全程不变。
+    var draggingSide = 0
+    var accumulated = 0f
+
+    detectHorizontalDragGestures(
+        onDragStart = {
+            draggingSide = 0
+            accumulated = 0f
+        },
+        onDragEnd = {
+            val commitDistance = sidebarWidthPx / SIDEBAR_COMMIT_FRACTION
+            when {
+                draggingSide == 1 && accumulated > commitDistance -> onCommitLeft()
+                draggingSide == 2 && accumulated < -commitDistance -> onCommitRight()
+                draggingSide != 0 -> onDragFinished()
+                else -> Unit
+            }
+            onDragFinished()
+            draggingSide = 0
+        },
+        onDragCancel = {
+            onDragFinished()
+            draggingSide = 0
+        },
+        onHorizontalDrag = { _, dragAmount ->
+            accumulated += dragAmount
+            if (draggingSide == 0) {
+                draggingSide = if (dragAmount > 0f) 1 else if (dragAmount < 0f) 2 else 0
+            }
+            // 进度 = 已拖距离 / 栏宽，钳在 0..1 —— 这就是「跟手」。
+            if (draggingSide == 1) {
+                onLeftProgress((accumulated / sidebarWidthPx).coerceIn(0f, 1f))
+            } else if (draggingSide == 2) {
+                onRightProgress((-accumulated / sidebarWidthPx).coerceIn(0f, 1f))
+            }
+        },
+    )
 }
