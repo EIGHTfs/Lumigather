@@ -12,13 +12,14 @@
 package com.eightfs.lumigather.data
 
 import kotlinx.coroutines.runBlocking
+import org.junit.Assume
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
-// 默认打实测用的那台部署实例（SA6400 上的 Lumigather）。
-private const val DEFAULT_SELF_CHECK_BASE_URL = "http://10.10.31.59:8081"
-
+// 刻意不设默认地址：这是个「连真实部署实例」的自检，写死任何一台机器的 IP 都会让
+// 别人克隆后跑测试时去连一个不存在的地址（超时/失败），而代码本身没问题。
+// 没配置就跳过（JUnit 的 assumeTrue），报告里会明确显示 skipped。
 private const val BASE_URL_PROPERTY = "lumigather.selfcheck.baseUrl"
 private const val BASE_URL_ENV = "LUMIGATHER_SELF_CHECK_BASE_URL"
 
@@ -34,7 +35,15 @@ class DataLayerSelfCheckTest {
 
     @Test
     fun selfCheckAgainstRealService() = runBlocking {
-        val baseUrl = resolveBaseUrl()
+        // 这个自检必须打真实部署实例才有意义；没有配置就从这条链路里退出，
+        // 而不是去连一个默认地址。assumeTrue 让报告显示 skipped 而非 passed，
+        // 避免「以为验过了」。
+        val configuredBaseUrl = resolveBaseUrl()
+        Assume.assumeTrue(
+            "未配置 $BASE_URL_PROPERTY 或 $BASE_URL_ENV，跳过真实服务自检",
+            configuredBaseUrl != null
+        )
+        val baseUrl = requireNotNull(configuredBaseUrl)
         val api = ApiClient(baseUrl, OkHttpHttpTransport())
         val repository = LumigatherRepository(api)
 
@@ -113,12 +122,13 @@ class DataLayerSelfCheckTest {
         println("=====================================")
     }
 
-    private fun resolveBaseUrl(): String {
+    /** 没配置时返回 null —— 调用方据此跳过，而不是回落到某个写死的地址。 */
+    private fun resolveBaseUrl(): String? {
         val fromProperty = System.getProperty(BASE_URL_PROPERTY)
         if (!fromProperty.isNullOrBlank()) return fromProperty
         val fromEnv = System.getenv(BASE_URL_ENV)
         if (!fromEnv.isNullOrBlank()) return fromEnv
-        return DEFAULT_SELF_CHECK_BASE_URL
+        return null
     }
 
     // 把错误展开成一行：userMessage 给用户看，detail/状态码给排查用，自检里两者都要。

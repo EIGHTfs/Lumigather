@@ -15,7 +15,7 @@ class MediaSrcTest {
     fun absoluteUrlKeepsOnlyPathAndQuery() {
         assertEquals(
             "/api/media?file=%2Fa%2Fb.png",
-            MediaSrc.normalize("http://10.10.31.59:8081/api/media?file=%2Fa%2Fb.png"),
+            MediaSrc.normalize("http://any-host:9999/api/media?file=%2Fa%2Fb.png"),
         )
     }
 
