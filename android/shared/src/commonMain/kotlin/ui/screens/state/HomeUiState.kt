@@ -12,6 +12,8 @@ package ui.screens.state
 import androidx.compose.runtime.mutableStateOf
 import com.eightfs.lumigather.data.ApiClient
 import com.eightfs.lumigather.data.ApiError
+import com.eightfs.lumigather.data.ArchiveEntry
+import com.eightfs.lumigather.data.ArchiveHeuristics
 import com.eightfs.lumigather.data.AuthTokenStore
 import com.eightfs.lumigather.data.CategoryView
 import com.eightfs.lumigather.data.ImageItem
@@ -73,7 +75,7 @@ data class AuthUiState(
  * 用一个枚举而不是三个布尔：互斥这件事由类型本身保证 —— 「收藏被选中时分类必须不选中」
  * 不需要任何清理代码，页面判断 selected 时写 `view == All && ...` 就永远不会两处同时亮。
  */
-enum class HomeView { All, Favorites, Guest }
+enum class HomeView { All, Favorites, Guest, Archive }
 
 /**
  * 整屏的完整状态。任何时刻界面都是它的一个纯函数。
@@ -139,6 +141,14 @@ data class HomeUiState(
     val guestLoading: Boolean = false,
     // 正在添加/移除的那条 src（非空 = 操作中 → 按钮禁用，防连点）
     val favoriteActionSrc: String = "",
+    // ---- 压缩包 / 序列帧（全部由服务端处理，客户端只拼 URL）----
+    val archiveDir: String = "",
+    val archives: List<ArchiveEntry> = emptyList(),
+    val archivesLoading: Boolean = false,
+    // 已打开的压缩包（null = 停在压缩包列表）
+    val openedArchive: ArchiveEntry? = null,
+    val archiveImages: List<ImageItem> = emptyList(),
+    val gifState: GifState = GifState.Idle,
 ) {
     // 左侧栏的可见分类：搜索框有内容时按展示名过滤，空查询不过滤。
     val visibleCategories: List<CategoryView>
@@ -169,6 +179,9 @@ data class HomeUiState(
 
             HomeView.Favorites -> "收藏 · ${favoriteImages.size}"
             HomeView.Guest -> "游客 · ${guestImages.size}"
+            HomeView.Archive -> openedArchive
+                ?.let { archive -> "${archive.name} · ${archiveImages.size}" }
+                ?: "压缩包 · ${archives.size}"
         }
 
     // ---- 三视图的唯一出口：页面只读这几个派生值，不再自己判断 view ----
@@ -179,6 +192,7 @@ data class HomeUiState(
             HomeView.All -> images
             HomeView.Favorites -> favoriteImages
             HomeView.Guest -> guestImages
+            HomeView.Archive -> archiveImages
         }
 
     val gridLoading: Boolean
@@ -186,6 +200,8 @@ data class HomeUiState(
             HomeView.All -> isLoadingPage
             HomeView.Favorites -> favoritesLoading
             HomeView.Guest -> guestLoading
+            // 包内图片是一次性拼好的（不需要网络），没有加载态
+            HomeView.Archive -> false
         }
 
     // 空态文案：三套数据"为什么没有"的原因不同，用同一句会让人以为收藏坏了
@@ -194,6 +210,7 @@ data class HomeUiState(
             HomeView.All -> "这个分类还没有图片"
             HomeView.Favorites -> "还没有收藏的图片"
             HomeView.Guest -> "还没有游客上传的图片"
+            HomeView.Archive -> "这个压缩包里没有图片"
         }
 
     val gridEmptyHint: String
@@ -201,6 +218,7 @@ data class HomeUiState(
             HomeView.All -> "试试左上角换一个分类"
             HomeView.Favorites -> "在图片详情里点「收藏」，就会出现在这里"
             HomeView.Guest -> "游客上传区目前是空的"
+            HomeView.Archive -> "试试包内其它格式，或返回压缩包列表"
         }
 
     // 当前详情图是否已收藏：按规范化 src 比对（原始写法可能是完整 URL，直接比会永远不相等）
@@ -208,6 +226,21 @@ data class HomeUiState(
         get() {
             val image = selectedImage ?: return false
             return MediaSrc.normalize(image.relativeUrl) in favoriteSrcs
+        }
+
+    /**
+     * 是否值得显示「合成动图」入口。
+     *
+     * 包内视图看这个包的条目名，目录视图看当前已加载的图片名 —— 判据只是"像不像序列帧"，
+     * 真正能不能合成由服务端决定（判错最多多/少一个按钮，不会给出错误结果）。
+     */
+    val canComposeGif: Boolean
+        get() = when (view) {
+            HomeView.Archive -> openedArchive
+                ?.let { ArchiveHeuristics.looksLikeSequence(it.images) }
+                ?: false
+            HomeView.All -> ArchiveHeuristics.looksLikeSequence(images.map { it.name })
+            HomeView.Favorites, HomeView.Guest -> false
         }
 
     // 当前这张图是否正在增删（按钮禁用 + 文案改"处理中"）
@@ -303,6 +336,12 @@ class HomeStateHolder(
         onServerReady = settings::markAddressSaved,
     )
 
+    // 压缩包子状态机：扫描压缩包、打开包内图片、合成序列帧 GIF（全部走服务端）
+    private val archive = ArchiveController(
+        channel = this,
+        repositoryProvider = { repository },
+    )
+
     // 收藏子状态机：收藏/游客列表、增删、是否已收藏、失败提示。
     // token 与"未登录就弹登录"都通过回调取得，自己不碰登录逻辑。
     private val favorite = FavoriteController(
@@ -372,6 +411,8 @@ class HomeStateHolder(
         resetContentForAddressChange()
         // 收藏/游客列表也属于"旧服务器的数据"：不清的话图标、计数、可点性全是假的
         favorite.resetLists()
+        // 压缩包路径、包内图片、已合成的 GIF 同理：留着每条都点不开
+        archive.resetArchive()
         sidebar.resetSearch()
         // 视图回默认分类视图：新服务器上原来停在"收藏"页多半是空的，停在空页会让人以为收藏丢了
         mutate { it.copy(view = HomeView.All) }
@@ -460,6 +501,34 @@ class HomeStateHolder(
         favorite.toggleFavorite()
     }
 
+    // ---- 压缩包 / 序列帧：全部转发给压缩包子状态机 ----
+
+    fun openArchive(entry: ArchiveEntry) {
+        archive.openArchive(entry)
+    }
+
+    fun closeArchive() {
+        archive.closeArchive()
+    }
+
+    /** 请求合成 GIF（目录或包内，取决于当前视图）。生成中会直接忽略，防连点。 */
+    fun requestGif() {
+        archive.requestGif()
+    }
+
+    // 图片加载成功/失败回调：GIF 是"按 URL 加载"的，只有图片层知道完成没完成
+    fun onGifLoaded(url: String) {
+        archive.onGifLoaded(url)
+    }
+
+    suspend fun onGifLoadFailed(url: String) {
+        archive.onGifLoadFailed(url)
+    }
+
+    fun dismissGif() {
+        archive.dismissGif()
+    }
+
     /**
      * 切换网格展示哪一套数据（分类 / 收藏 / 游客）。
      *
@@ -481,6 +550,8 @@ class HomeStateHolder(
             HomeView.All -> if (state.categories.isEmpty()) browse.refreshContent()
             HomeView.Favorites -> favorite.loadFavorites()
             HomeView.Guest -> favorite.loadGuestUploads()
+            // 压缩包按"当前分类的绝对路径"扫描；没选分类时会给出可操作提示
+            HomeView.Archive -> archive.loadArchives(state.selectedCategoryView?.rootPath.orEmpty())
         }
     }
 

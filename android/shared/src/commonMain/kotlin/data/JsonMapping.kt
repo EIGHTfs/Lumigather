@@ -70,6 +70,11 @@ private object Field {
     const val ALREADY_EXISTS = "alreadyExists"
     const val FAVORITES = "favorites"
     const val ID = "id"
+
+    // 压缩包扫描：{ok, zips:[{path,name,images,hasIni,speed}]}
+    const val ZIPS = "zips"
+    const val HAS_INI = "hasIni"
+    const val SPEED = "speed"
 }
 
 internal fun parseSiteConfig(json: JSONObject): SiteConfig = SiteConfig(
@@ -170,6 +175,30 @@ internal fun parseFavoriteMutation(json: JSONObject): FavoriteMutation = Favorit
     alreadyExists = json.optBoolean(Field.ALREADY_EXISTS, false),
     favorites = json.optJSONArray(Field.FAVORITES).mapFavoriteEntries(),
 )
+
+/**
+ * 压缩包扫描结果（`{ok:true, zips:[...]}`）→ 模型列表。
+ *
+ * images 是**包内条目名**（未编码），拼 URL 时才编码 —— 在解析阶段编码会让名字与包内真实条目对不上。
+ * speed 只有 hasIni 时服务端才给，缺字段必须是 null 而不是 0.0（0 会让界面显示"倍速 0"）。
+ */
+internal fun parseArchiveList(json: JSONObject): List<ArchiveEntry> {
+    val array = json.optJSONArray(Field.ZIPS) ?: return emptyList()
+    val result = ArrayList<ArchiveEntry>(array.length())
+    for (index in 0 until array.length()) {
+        val item = array.optJSONObject(index) ?: continue
+        result.add(
+            ArchiveEntry(
+                path = item.optString(Field.PATH, ""),
+                name = item.optString(Field.NAME, ""),
+                images = item.optJSONArray(Field.IMAGES).toStringList(),
+                hasIni = item.optBoolean(Field.HAS_INI, false),
+                speed = if (item.has(Field.SPEED)) item.optDouble(Field.SPEED) else null,
+            ),
+        )
+    }
+    return result
+}
 
 // 写操作响应里的 favorites 数组。ApiClient 需要它但 Field 是文件私有的，
 // 所以在这里给一个小出口，而不是把 Field 提升为 internal（那会让字段名常量四处可用）。

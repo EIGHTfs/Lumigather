@@ -14,9 +14,11 @@ package com.eightfs.lumigather
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.ImageDecoder
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
 import android.net.Uri
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Base64
@@ -26,6 +28,7 @@ import com.tencent.kuikly.core.render.android.adapter.HRImageLoadOption
 import com.tencent.kuikly.core.render.android.adapter.IKRImageAdapter
 import org.json.JSONObject
 import java.net.HttpURLConnection
+import java.nio.ByteBuffer
 import java.net.URL
 import java.util.concurrent.Executors
 
@@ -50,6 +53,10 @@ private const val SAMPLE_SIZE_STEP = 2
 private const val SAMPLE_SIZE_MIN = 1
 
 private const val SCHEME_FILE_PREFIX = "file://"
+
+// 动图判定：Content-Type 前缀 + 扩展名
+private const val GIF_CONTENT_TYPE_PREFIX = "image/gif"
+private const val GIF_EXTENSION = ".gif"
 private const val BASE64_PAYLOAD_SEPARATOR = ","
 private val HTTP_OK_RANGE = 200..299
 
@@ -103,13 +110,24 @@ class LumigatherImageAdapter(
         val cacheKey = buildCacheKey(option)
         memoryCache.get(cacheKey)?.let { cached -> return BitmapDrawable(context.resources, cached) }
 
-        // 三个来源共用一个解码入口，目标尺寸从 option 透传下去（而不是藏在字段里，
+        // 动图（服务端合成的序列帧 GIF）必须走"动画 Drawable"，不能按位图解 ——
+        // BitmapFactory 只取首帧，画出来的是一张静止图。动图也不进位图缓存（缓存的 key 与位图模型对不上）。
+        if (option.isWebUrl()) {
+            val download = download(option.src) ?: return null
+            if (download.isGif) {
+                return decodeAnimatedGif(download.bytes)
+            }
+            val bitmap = decodeBytesToBitmap(download.bytes, option) ?: return null
+            memoryCache.put(cacheKey, bitmap)
+            return BitmapDrawable(context.resources, bitmap)
+        }
+
+        // 其余来源共用一个解码入口，目标尺寸从 option 透传下去（而不是藏在字段里，
         // 那样多线程并发时会互相覆盖，采样率算错）。
         val bitmap = when {
             option.isBase64() -> decodeBase64(option.src)
             option.isAssets() -> decodeAssets(option.src, option)
             option.isFile() -> decodeFile(option)
-            option.isWebUrl() -> decodeRemote(option)
             else -> null
         } ?: return null
 
@@ -132,7 +150,7 @@ class LumigatherImageAdapter(
         val assetPath = source.removePrefix(HRImageLoadOption.SCHEME_ASSETS)
         val bytes = runCatching { context.assets.open(assetPath).use { stream -> stream.readBytes() } }
             .getOrNull() ?: return null
-        return decodeBytes(bytes, option)
+        return decodeBytesToBitmap(bytes, option)
     }
 
     private fun decodeFile(option: HRImageLoadOption): Bitmap? {
@@ -141,18 +159,16 @@ class LumigatherImageAdapter(
         return decodeWithSampling(option) { options -> BitmapFactory.decodeFile(path, options) }
     }
 
-    // 网络图：先读字节，再按目标尺寸降采样解码。
+    // 网络图：先读字节（顺便拿 Content-Type，用来判断是不是动图），再按目标尺寸降采样解码。
     // 直接 decodeStream 会把大图按原尺寸展开，NAS 上的图常见几 MB、几千像素宽，
     // 网格里同时解 9 张很容易 OOM。
-    private fun decodeRemote(option: HRImageLoadOption): Bitmap? {
-        val bytes = downloadBytes(option.src) ?: return null
-        return decodeBytes(bytes, option)
-    }
-
-    private fun decodeBytes(bytes: ByteArray, option: HRImageLoadOption): Bitmap? =
+    private fun decodeBytesToBitmap(bytes: ByteArray, option: HRImageLoadOption): Bitmap? =
         decodeWithSampling(option) { options -> BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options) }
 
-    private fun downloadBytes(url: String): ByteArray? {
+    // 一次下载的结果：字节 + 是否动图
+    private class DownloadedPayload(val bytes: ByteArray, val isGif: Boolean)
+
+    private fun download(url: String): DownloadedPayload? {
         val connection = runCatching { URL(url).openConnection() as HttpURLConnection }.getOrNull() ?: return null
         return try {
             connection.connectTimeout = CONNECT_TIMEOUT_MS
@@ -160,13 +176,37 @@ class LumigatherImageAdapter(
             connection.requestMethod = "GET"
             connection.instanceFollowRedirects = true
             if (connection.responseCode !in HTTP_OK_RANGE) return null
-            connection.inputStream.use { stream -> stream.readBytes() }
+            val contentType = connection.contentType.orEmpty()
+            val bytes = connection.inputStream.use { stream -> stream.readBytes() }
+            DownloadedPayload(bytes = bytes, isGif = isGifImage(url, contentType))
         } catch (failure: Exception) {
             // 单张图失败是常态（文件被删、临时断网），返回 null 让格子显示占位即可
             null
         } finally {
             connection.disconnect()
         }
+    }
+
+    // 判据两条：Content-Type 是 image/gif，或 URL 本身以 .gif 结尾。
+    // 服务端的 /api/gif、/api/zip/gif 没有扩展名，靠前者；本地 .gif 文件靠后者。
+    private fun isGifImage(url: String, contentType: String): Boolean =
+        contentType.startsWith(GIF_CONTENT_TYPE_PREFIX, ignoreCase = true) ||
+            url.substringBefore('?').endsWith(GIF_EXTENSION, ignoreCase = true)
+
+    /**
+     * 动图解码：API 28+ 用 ImageDecoder（返回的 AnimatedImageDrawable 被 ImageView 挂上后会自动播放）。
+     *
+     * API 24–27 没有 ImageDecoder，这里退回位图（只显示首帧）—— 本工程 minSdk 24，
+     * 但要用动图必须 28+。这是系统能力差异，不是可以"优化"的地方，故显式保留降级并注释。
+     */
+    private fun decodeAnimatedGif(bytes: ByteArray): Drawable? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
+            val firstFrame = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return null
+            return BitmapDrawable(context.resources, firstFrame)
+        }
+        return runCatching {
+            ImageDecoder.decodeDrawable(ImageDecoder.createSource(ByteBuffer.wrap(bytes)))
+        }.getOrNull()
     }
 
     // 两段式解码：先只读尺寸算出 inSampleSize，再真正解码。

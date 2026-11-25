@@ -244,6 +244,13 @@ private fun MainScaffold(
                 onLoadMore = { scope.launch { stateHolder.loadMore() } },
                 onRetry = { scope.launch { stateHolder.retry() } },
                 onOpenSettings = stateHolder::openSettings,
+                onOpenArchive = stateHolder::openArchive,
+                onCloseArchive = stateHolder::closeArchive,
+                onComposeGif = stateHolder::requestGif,
+                onGifLoaded = stateHolder::onGifLoaded,
+                // 失败要问服务端原因（一次网络请求），所以走挂起 + actionScope
+                onGifLoadFailed = { url -> actionScope.launch { stateHolder.onGifLoadFailed(url) } },
+                onDismissGif = stateHolder::dismissGif,
             )
         }
 

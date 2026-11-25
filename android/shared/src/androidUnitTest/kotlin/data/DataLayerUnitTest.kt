@@ -330,14 +330,14 @@ class RepositoryTest {
             {"path":"test-root/honkai","root":"test-root/honkai","recursive":true,"count":1,"total":1,
              "offset":0,"limit":20,"returned":1,
              "images":[{"name":"a.png","path":"test-root/honkai/a.png",
-                        "url":"/api/media?file=%2Froot%2Fhonkai%2Fa.png",
+                        "url":"/api/media?file=%2Ftest-root%2Fhonkai%2Fa.png",
                         "size":"139.4 KB","modified":"2023-08-18T06:56:03.097Z"}]}
         """.trimIndent()
         val repository = LumigatherRepository(ApiClient("http://h:8081", okJson(pageJson)))
         val page = (repository.loadPage("test-root/honkai", offset = 0) as ApiResult.Ok).value
         val image = page.images.single()
         // UI 拿到的必须是可直接加载的绝对地址，且不能是双重编码。
-        assertEquals("http://h:8081/api/media?file=%2Froot%2Fhonkai%2Fa.png", image.absoluteUrl)
+        assertEquals("http://h:8081/api/media?file=%2Ftest-root%2Fhonkai%2Fa.png", image.absoluteUrl)
         assertEquals("PNG", image.extensionText)
         assertEquals("2023-08-18", image.modifiedDateText)
     }

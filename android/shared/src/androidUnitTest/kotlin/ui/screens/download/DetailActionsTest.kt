@@ -51,10 +51,10 @@ private object UnusedTransport : HttpTransport {
 private val sampleImage = ImageItem(
     name = "Broyna.webp",
     path = "test-root/a/Broyna.webp",
-    relativeUrl = "/api/media?file=%2Fvolume6%2Fa%2FBroyna.webp",
+    relativeUrl = "/api/media?file=%2Ftest-root%2Fa%2FBroyna.webp",
     sizeText = "137.2 KB",
     modifiedIso = "2024-04-21T10:00:00Z",
-    absoluteUrl = "http://h:8081/api/media?file=%2Fvolume6%2Fa%2FBroyna.webp",
+    absoluteUrl = "http://h:8081/api/media?file=%2Ftest-root%2Fa%2FBroyna.webp",
 )
 
 private fun holderWith(downloader: ImageDownloader): HomeStateHolder =

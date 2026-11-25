@@ -50,6 +50,18 @@ data class HttpRawResponse(
 )
 
 /**
+ * 二进制回包：图片 / GIF 这类响应不能按文本读 —— 文本解码会把字节改坏（非法序列被替换成 U+FFFD）。
+ *
+ * 只在**需要判断成败原因**时才用它（例如 GIF 合成失败、服务端返回 400 + 中文 error）；
+ * 真正的图片展示走"给图片加载器一个 URL"，客户端不搬运几 MB 的字节。
+ */
+class HttpBytesResponse(
+    val statusCode: Int,
+    val bytes: ByteArray,
+    val contentType: String? = null,
+)
+
+/**
  * GET 请求的最小契约。
  *
  * [query] 用 Map 而不是拼好的字符串：调用方只表达"有这些参数"，
@@ -93,6 +105,16 @@ interface HttpTransport {
         headers: Map<String, String> = emptyMap(),
         timeoutMs: Long = DEFAULT_REQUEST_TIMEOUT_MS,
     ): HttpRawResponse = throw UnsupportedOperationException("该 HttpTransport 实现未提供 DELETE 能力")
+
+    /**
+     * 取二进制响应（图片 / GIF）。与 [get] 的区别只有"不把 body 当文本"：
+     * 状态码与 Content-Type 一样返回，调用方据此判断是拿到了图还是拿到了错误说明。
+     */
+    suspend fun getBytes(
+        url: String,
+        query: Map<String, String> = emptyMap(),
+        timeoutMs: Long = DEFAULT_REQUEST_TIMEOUT_MS,
+    ): HttpBytesResponse = throw UnsupportedOperationException("该 HttpTransport 实现未提供二进制 GET 能力")
 }
 
 /**

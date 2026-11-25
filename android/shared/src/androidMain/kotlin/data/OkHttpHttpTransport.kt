@@ -27,6 +27,10 @@ import java.util.concurrent.TimeUnit
 // Content-Type 头名，取它来判断媒体地址是不是图片（自检与后续收藏功能都要看这个）。
 private const val HEADER_CONTENT_TYPE = "Content-Type"
 
+// 写请求的方法名。集中成常量而不是散落字面量：这两个值要与接口语义严格对应，写错会静默发错方法。
+private const val WRITE_METHOD_POST = "POST"
+private const val WRITE_METHOD_DELETE = "DELETE"
+
 /**
  * 基于 OkHttp 的 [HttpTransport]。
  *
@@ -52,21 +56,52 @@ class OkHttpHttpTransport(
         headers: Map<String, String>,
         timeoutMs: Long,
     ): HttpRawResponse = withContext(Dispatchers.IO) {
-        executePostBlocking(url, body, contentType, headers, timeoutMs)
+        executeWriteBlocking(method = WRITE_METHOD_POST, url, body, contentType, headers, timeoutMs)
+    }
+
+    override suspend fun delete(
+        url: String,
+        body: String,
+        contentType: String,
+        headers: Map<String, String>,
+        timeoutMs: Long,
+    ): HttpRawResponse = withContext(Dispatchers.IO) {
+        executeWriteBlocking(method = WRITE_METHOD_DELETE, url, body, contentType, headers, timeoutMs)
+    }
+
+    override suspend fun getBytes(
+        url: String,
+        query: Map<String, String>,
+        timeoutMs: Long,
+    ): HttpBytesResponse = withContext(Dispatchers.IO) {
+        val fullUrl = UrlBuilder.build(url, query)
+        val request = Request.Builder().url(fullUrl).get().build()
+        callWithTimeout(timeoutMs).newCall(request).execute().use { response ->
+            // bytes() 直接读原始字节：图片/GIF 走文本解码会被改坏
+            HttpBytesResponse(
+                statusCode = response.code,
+                bytes = response.body?.bytes() ?: ByteArray(0),
+                contentType = response.header(HEADER_CONTENT_TYPE),
+            )
+        }
     }
 
     // 写请求：body 由调用方序列化好（登录那边用 JSONObject 拼，密码里的引号会被正确转义），
-    // 这里只负责按指定 Content-Type 发出去，并把额外请求头（如 Bearer token）带上。
-    private fun executePostBlocking(
+    // 这里只负责按指定 Content-Type 与 HTTP 方法发出去，并把额外请求头（如 Bearer token）带上。
+    private fun executeWriteBlocking(
+        method: String,
         url: String,
         body: String,
         contentType: String,
         headers: Map<String, String>,
         timeoutMs: Long,
     ): HttpRawResponse {
-        val requestBuilder = Request.Builder()
-            .url(url)
-            .post(body.toRequestBody(contentType.toMediaTypeOrNull()))
+        val requestBody = body.toRequestBody(contentType.toMediaTypeOrNull())
+        val requestBuilder = Request.Builder().url(url)
+        when (method) {
+            WRITE_METHOD_DELETE -> requestBuilder.delete(requestBody)
+            else -> requestBuilder.post(requestBody)
+        }
         headers.forEach { (name, value) -> requestBuilder.header(name, value) }
 
         callWithTimeout(timeoutMs).newCall(requestBuilder.build()).execute().use { response ->

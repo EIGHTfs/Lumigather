@@ -7,6 +7,7 @@ package ui.screens.main
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import com.eightfs.lumigather.data.ArchiveEntry
 import com.eightfs.lumigather.data.ImageItem
 import com.tencent.kuikly.compose.foundation.background
 import com.tencent.kuikly.compose.foundation.layout.Arrangement
@@ -40,6 +41,10 @@ import ui.components.AppError
 import ui.components.AppIconButton
 import ui.components.AppLoading
 import ui.screens.HomeLayout
+import ui.screens.archive.ArchiveGifArea
+import ui.screens.archive.ArchiveHeader
+import ui.screens.archive.ArchiveIniNotice
+import ui.screens.archive.ArchiveListPane
 import ui.screens.state.HomeUiState
 import ui.screens.state.HomeView
 
@@ -52,6 +57,13 @@ fun HomeScreen(
     onLoadMore: () -> Unit,
     onRetry: () -> Unit,
     onOpenSettings: () -> Unit,
+    // 压缩包动作（全部转给状态层，页面不做任何数据处理）
+    onOpenArchive: (ArchiveEntry) -> Unit,
+    onCloseArchive: () -> Unit,
+    onComposeGif: () -> Unit,
+    onGifLoaded: (String) -> Unit,
+    onGifLoadFailed: (String) -> Unit,
+    onDismissGif: () -> Unit,
     modifier: Modifier = Modifier,
     // 侧栏拖动由 AppRoot 构造后传进来，挂到网格区（避免抢顶部 chip 条的横向滚动）
     gridGestureModifier: Modifier = Modifier,
@@ -78,6 +90,12 @@ fun HomeScreen(
                 onOpenImage = onOpenImage,
                 onLoadMore = onLoadMore,
                 onRetry = onRetry,
+                onOpenArchive = onOpenArchive,
+                onCloseArchive = onCloseArchive,
+                onComposeGif = onComposeGif,
+                onGifLoaded = onGifLoaded,
+                onGifLoadFailed = onGifLoadFailed,
+                onDismissGif = onDismissGif,
             )
         }
 
@@ -201,7 +219,30 @@ private fun HomeContent(
     onOpenImage: (ImageItem) -> Unit,
     onLoadMore: () -> Unit,
     onRetry: () -> Unit,
+    onOpenArchive: (ArchiveEntry) -> Unit,
+    onCloseArchive: () -> Unit,
+    onComposeGif: () -> Unit,
+    onGifLoaded: (String) -> Unit,
+    onGifLoadFailed: (String) -> Unit,
+    onDismissGif: () -> Unit,
 ) {
+    // 压缩包视图是"网格之外的一条额外布局"（标题条 + mod 提示 + GIF 区 + 列表/网格），
+    // 所以先分流，避免把它硬塞进下面那串 when 里
+    if (state.view == HomeView.Archive) {
+        ArchiveContent(
+            state = state,
+            onOpenImage = onOpenImage,
+            onLoadMore = onLoadMore,
+            onOpenArchive = onOpenArchive,
+            onCloseArchive = onCloseArchive,
+            onComposeGif = onComposeGif,
+            onGifLoaded = onGifLoaded,
+            onGifLoadFailed = onGifLoadFailed,
+            onDismissGif = onDismissGif,
+        )
+        return
+    }
+
     val categoryError = state.categoryError
     val pageError = state.pageError
 
@@ -235,6 +276,50 @@ private fun HomeContent(
         )
 
         else -> ImageGrid(state = state, onOpenImage = onOpenImage, onLoadMore = onLoadMore)
+    }
+}
+
+/**
+ * 压缩包视图：标题条 + mod 提示 + GIF 区 + （包内图片网格 / 压缩包列表）。
+ *
+ * 包内图片复用现有 [ImageGrid]，所以点开能进详情右栏、能下载 —— 与普通图片完全同一条链路。
+ */
+@Composable
+private fun ArchiveContent(
+    state: HomeUiState,
+    onOpenImage: (ImageItem) -> Unit,
+    onLoadMore: () -> Unit,
+    onOpenArchive: (ArchiveEntry) -> Unit,
+    onCloseArchive: () -> Unit,
+    onComposeGif: () -> Unit,
+    onGifLoaded: (String) -> Unit,
+    onGifLoadFailed: (String) -> Unit,
+    onDismissGif: () -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        ArchiveHeader(
+            state = state,
+            onComposeGif = onComposeGif,
+            onCloseArchive = onCloseArchive,
+        )
+        state.openedArchive?.let { opened -> ArchiveIniNotice(opened) }
+        ArchiveGifArea(
+            state = state,
+            onGifLoaded = onGifLoaded,
+            onGifLoadFailed = onGifLoadFailed,
+            onDismissGif = onDismissGif,
+        )
+        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            when {
+                state.openedArchive == null -> ArchiveListPane(state = state, onOpenArchive = onOpenArchive)
+                state.gridImages.isEmpty() -> AppEmpty(
+                    modifier = Modifier.fillMaxSize(),
+                    title = state.gridEmptyTitle,
+                    hint = state.gridEmptyHint,
+                )
+                else -> ImageGrid(state = state, onOpenImage = onOpenImage, onLoadMore = onLoadMore)
+            }
+        }
     }
 }
 

@@ -29,8 +29,8 @@ class MediaSrcTest {
     fun sameFileInTwoFormsComparesEqual() {
         assertTrue(
             MediaSrc.isSame(
-                "http://h:8081/api/media?file=%2Fvolume6%2Fa.png",
-                "/api/media?file=%2Fvolume6%2Fa.png",
+                "http://h:8081/api/media?file=%2Ftest-root%2Fa.png",
+                "/api/media?file=%2Ftest-root%2Fa.png",
             ),
         )
         // 换端口也还是同一张图（host/port 被丢掉）
