@@ -15,6 +15,16 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+// 样本服务端地址：用 RFC 2606 保留域名 .test，既不写真实部署地址，也不写真实端口
+private const val SAMPLE_BASE_URL = "http://server.test"
+// 样本根路径：模拟服务端返回的分类绝对路径。
+// 必须是**绝对路径**形态（带前导斜杠）：真实服务端返回的就是 /volume6/... 这类绝对路径，
+// 换成相对形态会让"绝对路径"分支测不到（MediaSrc.normalize 的"补斜杠"分支会被当成主路径）。
+// 用 /root/xxx 这种明显的虚构绝对路径：既保持线上真实形态，又不含任何本机环境信息。
+private const val SAMPLE_ROOT_PATH = "/root/honkai"
+
+// 样本分类名：站点配置 fixture 与断言共用一份，改的时候只改这里
+private const val SAMPLE_CATEGORY_NAME = "崩坏3"
 
 // 假的传输层：把"发出去的请求"和"要回的响应"都变成可断言的变量。
 // 有了它，ApiClient 的四种失败分支都能在毫秒级覆盖，不必真去构造 500 或坏 JSON。
@@ -61,15 +71,15 @@ class UrlBuilderTest {
     @Test
     fun buildAppendsQueryInDeclarationOrder() {
         val url = UrlBuilder.build(
-            "http://h:8081/api/images",
+            "$SAMPLE_BASE_URL/api/images",
             mapOf("root" to "/a b", "offset" to "0", "limit" to "20")
         )
-        assertEquals("http://h:8081/api/images?root=%2Fa%20b&offset=0&limit=20", url)
+        assertEquals("$SAMPLE_BASE_URL/api/images?root=%2Fa%20b&offset=0&limit=20", url)
     }
 
     @Test
     fun buildWithoutQueryKeepsUrlClean() {
-        assertEquals("http://h:8081/api/status", UrlBuilder.build("http://h:8081/api/status", emptyMap()))
+        assertEquals("$SAMPLE_BASE_URL/api/status", UrlBuilder.build("$SAMPLE_BASE_URL/api/status", emptyMap()))
     }
 }
 
@@ -77,7 +87,7 @@ class MediaUrlTest {
 
     @Test
     fun normalizeBaseUrlDropsTrailingSlashAndSpaces() {
-        assertEquals("http://h:8081", normalizeBaseUrl("  http://h:8081/  "))
+        assertEquals("$SAMPLE_BASE_URL", normalizeBaseUrl("  http://server.test/  "))
         assertEquals("", normalizeBaseUrl("   "))
     }
 
@@ -93,25 +103,25 @@ class MediaUrlTest {
     @Test
     fun joinUrlDoesNotDoubleEncode() {
         // 关键：已编码的 %2F 必须原样保留，重编会变成 %252F 从而 404。
-        val joined = joinUrl("http://h:8081/", "/api/media?file=%2Fa%2Fb.png")
-        assertEquals("http://h:8081/api/media?file=%2Fa%2Fb.png", joined)
+        val joined = joinUrl("$SAMPLE_BASE_URL/", "/api/media?file=%2Fa%2Fb.png")
+        assertEquals("$SAMPLE_BASE_URL/api/media?file=%2Fa%2Fb.png", joined)
         assertFalse(joined.contains("%252F"))
     }
 
     @Test
     fun joinUrlPassesAbsoluteThrough() {
-        assertEquals("https://cdn/x.png", joinUrl("http://h:8081", "https://cdn/x.png"))
+        assertEquals("https://cdn/x.png", joinUrl("$SAMPLE_BASE_URL", "https://cdn/x.png"))
     }
 
     @Test
     fun joinUrlWithEmptyInputsReturnsEmpty() {
-        assertEquals("", joinUrl("http://h:8081", ""))
+        assertEquals("", joinUrl("$SAMPLE_BASE_URL", ""))
     }
 
     @Test
     fun mediaUrlOfUsesItemRelativeUrl() {
         val item = ImageItem(name = "a.png", relativeUrl = "/api/media?file=%2Fa.png")
-        assertEquals("http://h:8081/api/media?file=%2Fa.png", mediaUrlOf("http://h:8081", item))
+        assertEquals("$SAMPLE_BASE_URL/api/media?file=%2Fa.png", mediaUrlOf("$SAMPLE_BASE_URL", item))
     }
 }
 
@@ -167,7 +177,7 @@ class ApiClientTest {
     @Test
     fun blankRootIsBadArgumentAndSendsNoRequest() = runBlocking {
         val transport = FakeTransport(HttpRawResponse(200, "{}", null))
-        val client = ApiClient("http://h:8081", transport)
+        val client = ApiClient("$SAMPLE_BASE_URL", transport)
         val result = client.fetchImages(root = "")
         assertTrue((result as ApiResult.Err).error is ApiError.BadArgument)
         // 没有发请求：空 root 一旦发出去，后端会回落到全局 fsRoot，拿回来的是别的目录的图。
@@ -177,9 +187,9 @@ class ApiClientTest {
     @Test
     fun imagesRequestUsesRootParamAndRecursiveTrue() = runBlocking {
         val transport = okJson("""{"total":3,"returned":0,"images":[]}""")
-        val client = ApiClient("http://h:8081/", transport)
+        val client = ApiClient("$SAMPLE_BASE_URL/", transport)
         client.fetchImages(root = "/a b", offset = 40, limit = 20)
-        assertEquals("http://h:8081/api/images", transport.lastUrl)
+        assertEquals("$SAMPLE_BASE_URL/api/images", transport.lastUrl)
         // 参数名必须是 root（不是 dir），递归必须是 true（默认 false 只拿根目录那一层）。
         assertEquals("/a b", transport.lastQuery["root"])
         assertEquals("true", transport.lastQuery["recursive"])
@@ -191,7 +201,7 @@ class ApiClientTest {
     @Test
     fun negativeOffsetAndZeroLimitAreClamped() = runBlocking {
         val transport = okJson("""{"images":[]}""")
-        val client = ApiClient("http://h:8081", transport)
+        val client = ApiClient("$SAMPLE_BASE_URL", transport)
         client.fetchImages(root = "/a", offset = -5, limit = 0)
         assertEquals("0", transport.lastQuery["offset"])
         assertEquals("1", transport.lastQuery["limit"])
@@ -202,7 +212,7 @@ class ApiClientTest {
         val transport = FakeTransport(
             HttpRawResponse(500, """{"error":"ENOENT: no such file or directory"}""", null)
         )
-        val result = ApiClient("http://h:8081", transport).fetchImages(root = "/nope")
+        val result = ApiClient("$SAMPLE_BASE_URL", transport).fetchImages(root = "/nope")
         val error = (result as ApiResult.Err).error
         assertTrue(error is ApiError.Http)
         assertEquals(500, (error as ApiError.Http).statusCode)
@@ -212,7 +222,7 @@ class ApiClientTest {
     @Test
     fun httpErrorWithNonJsonBodyStillReportsStatus() = runBlocking {
         val transport = FakeTransport(HttpRawResponse(502, "<html>bad gateway</html>", "text/html"))
-        val result = ApiClient("http://h:8081", transport).fetchStatus()
+        val result = ApiClient("$SAMPLE_BASE_URL", transport).fetchStatus()
         val error = (result as ApiResult.Err).error
         assertEquals(502, (error as ApiError.Http).statusCode)
         assertEquals("", error.serverMessage)
@@ -222,7 +232,7 @@ class ApiClientTest {
     fun errorFieldInsideOkResponseIsTreatedAsFailure() = runBlocking {
         // 后端存在 200 + {"error": ...} 的路径。当成成功会把失败显示成"空目录"。
         val transport = okJson("""{"error":"EACCES: permission denied"}""")
-        val result = ApiClient("http://h:8081", transport).fetchDirectories("/x")
+        val result = ApiClient("$SAMPLE_BASE_URL", transport).fetchDirectories("/x")
         val error = (result as ApiResult.Err).error
         assertTrue(error is ApiError.Http)
         assertEquals("EACCES: permission denied", (error as ApiError.Http).serverMessage)
@@ -231,14 +241,14 @@ class ApiClientTest {
     @Test
     fun malformedJsonBecomesParseError() = runBlocking {
         val transport = okJson("{not json")
-        val result = ApiClient("http://h:8081", transport).fetchStatus()
+        val result = ApiClient("$SAMPLE_BASE_URL", transport).fetchStatus()
         assertTrue((result as ApiResult.Err).error is ApiError.Parse)
     }
 
     @Test
     fun networkFailureBecomesNetworkError() = runBlocking {
         val transport = FakeTransport(failure = IllegalStateException("connect timed out"))
-        val result = ApiClient("http://h:8081", transport).fetchStatus()
+        val result = ApiClient("$SAMPLE_BASE_URL", transport).fetchStatus()
         val error = (result as ApiResult.Err).error
         assertTrue(error is ApiError.Network)
         assertEquals("connect timed out", error.detail)
@@ -250,8 +260,8 @@ class ApiClientTest {
     @Test
     fun degradedImagesResponseParsesAsEmptyPage() = runBlocking {
         // 实测降级体：缺 root/total/offset/limit/returned/recursive。
-        val transport = okJson("""{"path":"test-root/__nope__","count":0,"images":[]}""")
-        val result = ApiClient("http://h:8081", transport).fetchImages(root = "test-root/__nope__")
+        val transport = okJson("""{"path":"/root/__nope__","count":0,"images":[]}""")
+        val result = ApiClient("$SAMPLE_BASE_URL", transport).fetchImages(root = "/root/__nope__")
         val page = (result as ApiResult.Ok).value
         assertEquals(0, page.returned)
         assertEquals(0, page.images.size)
@@ -262,12 +272,12 @@ class ApiClientTest {
     fun statusResponseParses() = runBlocking {
         val transport = okJson(
             """{"ok":true,"needsSetup":false,"needsAuth":true,"authed":false,""" +
-                """"port":8081,"uptimeSec":630,"version":"1.0.3"}"""
+                """"port":9000,"uptimeSec":630,"version":"1.0.3"}"""
         )
-        val status = (ApiClient("http://h:8081", transport).fetchStatus() as ApiResult.Ok).value
+        val status = (ApiClient("$SAMPLE_BASE_URL", transport).fetchStatus() as ApiResult.Ok).value
         assertTrue(status.ok)
         assertTrue(status.needsAuth)
-        assertEquals(8081, status.port)
+        assertEquals(9000, status.port)
         assertEquals(630L, status.uptimeSec)
         assertEquals("1.0.3", status.version)
     }
@@ -277,19 +287,19 @@ class RepositoryTest {
 
     // 一份贴合真实结构的站点配置：两个分类，其中一个在 directories 里没有路径（脏数据）。
     private val siteConfigJson = """
-        {"title":"拾光集","fsRoot":"test-root/fallback","imagesPerRow":20,
-         "categories":[{"name":"崩坏3","label":"崩坏3","color":"#c084fc"},
+        {"title":"拾光集","fsRoot":"/root/fallback","imagesPerRow":20,
+         "categories":[{"name":"$SAMPLE_CATEGORY_NAME","label":"$SAMPLE_CATEGORY_NAME","color":"#c084fc"},
                        {"name":"原神","label":"原神","color":"#4ade80"}],
-         "directories":[{"path":"test-root/honkai","category":"崩坏3"}]}
+         "directories":[{"path":"$SAMPLE_ROOT_PATH","category":"$SAMPLE_CATEGORY_NAME"}]}
     """.trimIndent()
 
     @Test
     fun categoriesBindTheirOwnRootPath() = runBlocking {
-        val repository = LumigatherRepository(ApiClient("http://h:8081", okJson(siteConfigJson)))
+        val repository = LumigatherRepository(ApiClient("$SAMPLE_BASE_URL", okJson(siteConfigJson)))
         val views = (repository.loadCategories() as ApiResult.Ok).value
         assertEquals(2, views.size)
         // 契约字段：name / color / rootPath / imageCount 必须齐。
-        assertEquals("test-root/honkai", views[0].rootPath)
+        assertEquals("$SAMPLE_ROOT_PATH", views[0].rootPath)
         assertEquals("#c084fc", views[0].color)
         assertEquals(0, views[0].imageCount)
         assertEquals(CountState.UNKNOWN, views[0].countState)
@@ -298,10 +308,10 @@ class RepositoryTest {
 
     @Test
     fun categoryWithoutDirectoryFallsBackAndIsFlagged() = runBlocking {
-        val repository = LumigatherRepository(ApiClient("http://h:8081", okJson(siteConfigJson)))
+        val repository = LumigatherRepository(ApiClient("$SAMPLE_BASE_URL", okJson(siteConfigJson)))
         val views = (repository.loadCategories() as ApiResult.Ok).value
         // 没配路径的分类回落全局根，但必须打上标记 —— 否则用户会以为两个分类是同一种图库。
-        assertEquals("test-root/fallback", views[1].rootPath)
+        assertEquals("/root/fallback", views[1].rootPath)
         assertTrue(views[1].rootIsFallback)
     }
 
@@ -312,32 +322,32 @@ class RepositoryTest {
             HttpRawResponse(200, siteConfigJson, "application/json"),
             HttpRawResponse(200, """{"total":72651,"returned":1,"images":[]}""", "application/json")
         )
-        val repository = LumigatherRepository(ApiClient("http://h:8081", transport))
+        val repository = LumigatherRepository(ApiClient("$SAMPLE_BASE_URL", transport))
         repository.loadCategories()
-        val updated = (repository.refreshCategoryCount("崩坏3") as ApiResult.Ok).value
+        val updated = (repository.refreshCategoryCount("$SAMPLE_CATEGORY_NAME") as ApiResult.Ok).value
         assertEquals(72651, updated.imageCount)
         assertEquals(CountState.READY, updated.countState)
         // 探针请求必须带该分类自己的 root，且 limit=1 只读 total。
-        assertEquals("test-root/honkai", transport.lastQuery["root"])
+        assertEquals("$SAMPLE_ROOT_PATH", transport.lastQuery["root"])
         assertEquals("1", transport.lastQuery["limit"])
         // 仓库缓存里的同名分类也要同步更新，供 UI 直接读。
-        assertEquals(72651, repository.findCategory("崩坏3")?.imageCount)
+        assertEquals(72651, repository.findCategory("$SAMPLE_CATEGORY_NAME")?.imageCount)
     }
 
     @Test
     fun loadPageFillsAbsoluteUrl() = runBlocking {
         val pageJson = """
-            {"path":"test-root/honkai","root":"test-root/honkai","recursive":true,"count":1,"total":1,
+            {"path":"$SAMPLE_ROOT_PATH","root":"$SAMPLE_ROOT_PATH","recursive":true,"count":1,"total":1,
              "offset":0,"limit":20,"returned":1,
-             "images":[{"name":"a.png","path":"test-root/honkai/a.png",
-                        "url":"/api/media?file=%2Ftest-root%2Fhonkai%2Fa.png",
+             "images":[{"name":"a.png","path":"$SAMPLE_ROOT_PATH/a.png",
+                        "url":"/api/media?file=%2Froot%2Fhonkai%2Fa.png",
                         "size":"139.4 KB","modified":"2023-08-18T06:56:03.097Z"}]}
         """.trimIndent()
-        val repository = LumigatherRepository(ApiClient("http://h:8081", okJson(pageJson)))
-        val page = (repository.loadPage("test-root/honkai", offset = 0) as ApiResult.Ok).value
+        val repository = LumigatherRepository(ApiClient("$SAMPLE_BASE_URL", okJson(pageJson)))
+        val page = (repository.loadPage("$SAMPLE_ROOT_PATH", offset = 0) as ApiResult.Ok).value
         val image = page.images.single()
         // UI 拿到的必须是可直接加载的绝对地址，且不能是双重编码。
-        assertEquals("http://h:8081/api/media?file=%2Ftest-root%2Fhonkai%2Fa.png", image.absoluteUrl)
+        assertEquals("$SAMPLE_BASE_URL/api/media?file=%2Froot%2Fhonkai%2Fa.png", image.absoluteUrl)
         assertEquals("PNG", image.extensionText)
         assertEquals("2023-08-18", image.modifiedDateText)
     }
@@ -345,7 +355,7 @@ class RepositoryTest {
     @Test
     fun unknownCategoryIsRejectedWithoutRequest() = runBlocking {
         val transport = okJson(siteConfigJson)
-        val repository = LumigatherRepository(ApiClient("http://h:8081", transport))
+        val repository = LumigatherRepository(ApiClient("$SAMPLE_BASE_URL", transport))
         val result = repository.loadPageForCategory("不存在的分类", offset = 0)
         assertTrue((result as ApiResult.Err).error is ApiError.BadArgument)
         assertEquals("", transport.lastUrl)
@@ -355,17 +365,17 @@ class RepositoryTest {
     fun refreshCategoryCountsKeepsEveryCategoryWhenRunConcurrently() = runBlocking {
         // 回归用例：并发补张数时，如果每个协程各自「读缓存 → 改 → 写回」，
         // 后写的会覆盖先写的，部分分类张数停留在 0。这条断言就是钉住那个丢更新。
-        val countByRoot = mapOf("test-root/c1" to 11, "test-root/c2" to 22, "test-root/c3" to 33, "test-root/c4" to 44)
+        val countByRoot = mapOf("/root/c1" to 11, "/root/c2" to 22, "/root/c3" to 33, "/root/c4" to 44)
         val config = """
-            {"title":"t","fsRoot":"test-root/fallback","imagesPerRow":20,
+            {"title":"t","fsRoot":"/root/fallback","imagesPerRow":20,
              "categories":[{"name":"c1","label":"c1","color":"#111"},
                            {"name":"c2","label":"c2","color":"#222"},
                            {"name":"c3","label":"c3","color":"#333"},
                            {"name":"c4","label":"c4","color":"#444"}],
-             "directories":[{"path":"test-root/c1","category":"c1"},
-                            {"path":"test-root/c2","category":"c2"},
-                            {"path":"test-root/c3","category":"c3"},
-                            {"path":"test-root/c4","category":"c4"}]}
+             "directories":[{"path":"/root/c1","category":"c1"},
+                            {"path":"/root/c2","category":"c2"},
+                            {"path":"/root/c3","category":"c3"},
+                            {"path":"/root/c4","category":"c4"}]}
         """.trimIndent()
 
         // 按 root 路由而不是按调用顺序：并发下响应顺序不确定，顺序化假传输会串数据。
@@ -378,7 +388,7 @@ class RepositoryTest {
             }
         }
 
-        val repository = LumigatherRepository(ApiClient("http://h:8081", transport))
+        val repository = LumigatherRepository(ApiClient("$SAMPLE_BASE_URL", transport))
         repository.loadCategories()
         val updated = repository.refreshCategoryCounts(maxConcurrent = 4)
 

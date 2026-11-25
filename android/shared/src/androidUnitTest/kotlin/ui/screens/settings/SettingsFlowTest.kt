@@ -17,22 +17,29 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
+// 样本服务端地址：用 RFC 2606 保留域名 .test，既不写真实部署地址，也不写真实端口
+private const val SAMPLE_BASE_URL = "http://server.test"
+// 样本根路径：模拟服务端返回的分类绝对路径。
+// 必须是**绝对路径**形态（带前导斜杠）：真实服务端返回的就是 /volume6/... 这类绝对路径，
+// 换成相对形态会让"绝对路径"分支测不到（MediaSrc.normalize 的"补斜杠"分支会被当成主路径）。
+// 用 /root/xxx 这种明显的虚构绝对路径：既保持线上真实形态，又不含任何本机环境信息。
+private const val SAMPLE_ROOT_PATH = "/root/honkai"
 
 // 站点配置最小样本：一个分类 + 它的绝对路径（真实响应里 categories 与 directories 是两张表）
 private const val SITE_CONFIG_JSON = """
-{"title":"拾光集","fsRoot":"test-root/fallback","imagesPerRow":20,
+{"title":"拾光集","fsRoot":"/root/fallback","imagesPerRow":20,
  "categories":[{"name":"崩坏3","label":"崩坏3","color":"#c084fc"}],
- "directories":[{"path":"test-root/honkai","category":"崩坏3"}]}
+ "directories":[{"path":"$SAMPLE_ROOT_PATH","category":"崩坏3"}]}
 """
 
 private const val STATUS_JSON = """
-{"ok":true,"needsSetup":false,"needsAuth":false,"authed":false,"port":8081,"uptimeSec":9,"version":"1.0.3"}
+{"ok":true,"needsSetup":false,"needsAuth":false,"authed":false,"port":9000,"uptimeSec":9,"version":"1.0.3"}
 """
 
 private const val IMAGES_JSON = """
-{"path":"test-root/honkai","root":"test-root/honkai","recursive":true,"count":1,"total":1,
+{"path":"$SAMPLE_ROOT_PATH","root":"$SAMPLE_ROOT_PATH","recursive":true,"count":1,"total":1,
  "offset":0,"limit":1,"returned":1,
- "images":[{"name":"a.png","path":"test-root/honkai/a.png","url":"/api/media?file=%2Fa.png",
+ "images":[{"name":"a.png","path":"$SAMPLE_ROOT_PATH/a.png","url":"/api/media?file=%2Fa.png",
             "size":"1.0 KB","modified":"2023-08-18T06:56:03.097Z"}]}
 """
 
@@ -70,13 +77,13 @@ class ServerAddressRulesTest {
 
     @Test
     fun keepsSubPathAndStripsTrailingSlashAndSpaces() {
-        assertEquals("http://h:8081/lumigather", ServerAddressRules.normalize("  http://h:8081/lumigather///  "))
+        assertEquals("$SAMPLE_BASE_URL/lumigather", ServerAddressRules.normalize("  http://server.test/lumigather///  "))
     }
 
     @Test
     fun lowercasesScheme() {
         // 大小写混写的协议头也要能用，否则用户手打 "HTTP://" 就被判非法
-        assertEquals("https://h:8081", ServerAddressRules.normalize("HTTPS://h:8081/"))
+        assertEquals("https://h:9000", ServerAddressRules.normalize("HTTPS://h:9000/"))
     }
 
     @Test
@@ -87,13 +94,13 @@ class ServerAddressRulesTest {
     @Test
     fun rejectsMissingScheme() {
         // 不补默认协议：补了会掩盖"用户以为自己填的是域名/端口"这类误填
-        assertEquals(null, ServerAddressRules.normalize("nas.lan:8081"))
+        assertEquals(null, ServerAddressRules.normalize("nas.lan:9000"))
     }
 
     @Test
     fun rejectsBlankAndSpacesAndHostlessAddress() {
         assertEquals(null, ServerAddressRules.normalize("   "))
-        assertEquals(null, ServerAddressRules.normalize("http://h:8081/a b"))
+        assertEquals(null, ServerAddressRules.normalize("$SAMPLE_BASE_URL/a b"))
         assertEquals(null, ServerAddressRules.normalize("http:///path"))
     }
 
@@ -148,14 +155,14 @@ class HomeStateHolderTest {
     @Test
     fun savedAddressLoadsCategoriesWithoutSettings() = runBlocking {
         val transport = RoutingTransport()
-        val holder = holderWith(MemoryAddressStore("http://h:8081"), transport)
+        val holder = holderWith(MemoryAddressStore("$SAMPLE_BASE_URL"), transport)
         holder.bootstrap()
 
         assertFalse(holder.state.settingsOpen)
         assertEquals(1, holder.state.categories.size)
-        assertEquals("test-root/honkai", holder.state.categories.first().rootPath)
+        assertEquals("$SAMPLE_ROOT_PATH", holder.state.categories.first().rootPath)
         // 用的必须是存下来的地址
-        assertTrue(transport.requestedUrls.all { it.startsWith("http://h:8081/") })
+        assertTrue(transport.requestedUrls.all { it.startsWith("$SAMPLE_BASE_URL/") })
     }
 
     @Test
@@ -165,11 +172,11 @@ class HomeStateHolderTest {
         val holder = holderWith(store, transport)
         holder.bootstrap()
 
-        holder.updateAddressDraft("  http://h:8081//  ")
+        holder.updateAddressDraft("  http://server.test//  ")
         holder.saveAddress()
 
         // 落盘的是归一化后的值（去空格、去尾部斜杠）
-        assertEquals("http://h:8081", store.stored())
+        assertEquals("$SAMPLE_BASE_URL", store.stored())
         // 不重启也能进主界面：保存后立刻重跑了分类链路
         assertFalse(holder.state.settingsOpen)
         assertEquals(1, holder.state.categories.size)
@@ -182,7 +189,7 @@ class HomeStateHolderTest {
         val holder = holderWith(store, RoutingTransport())
         holder.bootstrap()
 
-        holder.updateAddressDraft("h:8081")
+        holder.updateAddressDraft("h:9000")
         holder.saveAddress()
 
         assertEquals("", store.stored(), "非法地址绝不能落盘，否则下次冷启动直接坏掉")
@@ -196,7 +203,7 @@ class HomeStateHolderTest {
         val holder = holderWith(store, RoutingTransport())
         holder.bootstrap()
 
-        holder.updateAddressDraft("http://h:8081")
+        holder.updateAddressDraft("$SAMPLE_BASE_URL")
         holder.testAddress()
 
         val testState = holder.state.testState
@@ -212,12 +219,12 @@ class HomeStateHolderTest {
             override suspend fun get(url: String, query: Map<String, String>, timeoutMs: Long): HttpRawResponse =
                 throw IllegalStateException("connect timed out")
         }
-        val holder = holderWith(MemoryAddressStore("http://h:8081"), unreachable)
+        val holder = holderWith(MemoryAddressStore("$SAMPLE_BASE_URL"), unreachable)
         holder.bootstrap()
 
         // 主链路失败后进设置态；再测一次连接应拿到"无法连接"这类中文原因
         holder.openSettings()
-        holder.updateAddressDraft("http://h:8081")
+        holder.updateAddressDraft("$SAMPLE_BASE_URL")
         holder.testAddress()
 
         val testState = holder.state.testState

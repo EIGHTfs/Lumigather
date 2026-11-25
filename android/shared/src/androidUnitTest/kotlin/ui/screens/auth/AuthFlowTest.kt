@@ -30,6 +30,8 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+// 样本服务端地址：用 RFC 2606 保留域名 .test，既不写真实部署地址，也不写真实端口
+private const val SAMPLE_BASE_URL = "http://server.test"
 
 // 固定"现在"：2024-01-01T00:00:00Z。用固定时钟才能断言"有效期正好 30 天"这类事实。
 private const val NOW_MS = 1_704_067_200_000L
@@ -38,11 +40,11 @@ private const val ONE_HOUR_MS = 3_600_000L
 private const val SITE_CONFIG_JSON = """
 {"title":"拾光集","fsRoot":"/root","imagesPerRow":20,
  "categories":[{"name":"崩坏3","label":"崩坏3","color":"#c084fc"}],
- "directories":[{"path":"test-root/honkai","category":"崩坏3"}]}
+ "directories":[{"path":"/root/honkai","category":"崩坏3"}]}
 """
 
 private const val IMAGES_JSON = """
-{"path":"test-root/honkai","root":"test-root/honkai","recursive":true,"count":0,"total":0,
+{"path":"/root/honkai","root":"/root/honkai","recursive":true,"count":0,"total":0,
  "offset":0,"limit":20,"returned":0,"images":[]}
 """
 
@@ -129,7 +131,7 @@ private class AuthTransport(
 private fun holder(
     transport: HttpTransport,
     tokenStore: AuthTokenStore = MemoryAuthTokenStore(),
-    addressStore: ServerAddressStore = FixedAddressStore("http://h:8081"),
+    addressStore: ServerAddressStore = FixedAddressStore("$SAMPLE_BASE_URL"),
     now: Long = NOW_MS,
 ): HomeStateHolder = HomeStateHolder(
     clientFactory = { address, onUnauthorized ->
@@ -293,13 +295,13 @@ class SessionBoundaryTest {
     @Test
     fun changingServerAddressClearsToken() = runBlocking {
         val tokenStore = MemoryAuthTokenStore(StoredAuthToken("old-token", NOW_MS + 10 * ONE_HOUR_MS))
-        val addressStore = FixedAddressStore("http://h:8081")
+        val addressStore = FixedAddressStore("$SAMPLE_BASE_URL")
         val stateHolder = holder(AuthTransport(), tokenStore, addressStore)
         stateHolder.bootstrap()
         assertTrue(stateHolder.state.auth.loggedIn, "前提：先处于已登录")
 
         stateHolder.openSettings()
-        stateHolder.updateAddressDraft("http://other:8081")
+        stateHolder.updateAddressDraft("http://other:9000")
         stateHolder.saveAddress()
 
         assertNull(tokenStore.read(), "换服务器必须清 token（旧 token 对新服务器无效）")
@@ -340,7 +342,7 @@ class SessionBoundaryTest {
             com.eightfs.lumigather.data.ImageItem(
                 name = "a.png",
                 relativeUrl = "/api/media?file=%2Fa.png",
-                absoluteUrl = "http://h:8081/api/media?file=%2Fa.png",
+                absoluteUrl = "$SAMPLE_BASE_URL/api/media?file=%2Fa.png",
             ),
         )
 

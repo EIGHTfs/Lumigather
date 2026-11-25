@@ -29,8 +29,8 @@ class MediaSrcTest {
     fun sameFileInTwoFormsComparesEqual() {
         assertTrue(
             MediaSrc.isSame(
-                "http://h:8081/api/media?file=%2Ftest-root%2Fa.png",
-                "/api/media?file=%2Ftest-root%2Fa.png",
+                "http://server.test/api/media?file=%2Froot%2Fa.png",
+                "/api/media?file=%2Froot%2Fa.png",
             ),
         )
         // 换端口也还是同一张图（host/port 被丢掉）
@@ -51,7 +51,7 @@ class MediaSrcTest {
     fun emptyOrHostlessInputsAreNotComparable() {
         assertEquals("", MediaSrc.normalize(""))
         assertEquals("", MediaSrc.normalize("   "))
-        assertEquals("", MediaSrc.normalize("http://h:8081"))
+        assertEquals("", MediaSrc.normalize("http://server.test"))
         // 两个都解析失败时不能算"相同"，否则"未知"会被当成"已收藏"而点不掉
         assertFalse(MediaSrc.isSame("", ""))
     }

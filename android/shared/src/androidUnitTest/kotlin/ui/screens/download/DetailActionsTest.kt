@@ -20,6 +20,13 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+// 样本服务端地址：用 RFC 2606 保留域名 .test，既不写真实部署地址，也不写真实端口
+private const val SAMPLE_BASE_URL = "http://server.test"
+// 样本根路径：模拟服务端返回的分类绝对路径。
+// 必须是**绝对路径**形态（带前导斜杠）：真实服务端返回的就是 /volume6/... 这类绝对路径，
+// 换成相对形态会让"绝对路径"分支测不到（MediaSrc.normalize 的"补斜杠"分支会被当成主路径）。
+// 用 /root/xxx 这种明显的虚构绝对路径：既保持线上真实形态，又不含任何本机环境信息。
+private const val SAMPLE_ROOT_PATH = "/root/honkai"
 
 // 记录调用次的假下载器：用它断言"点一次只下一次""点收藏不会触发下载"。
 private class FakeImageDownloader(
@@ -38,7 +45,7 @@ private class FakeImageDownloader(
 
 // 空实现存储：这些用例不涉及地址读写
 private class EmptyAddressStore : ServerAddressStore {
-    override fun read(): String = "http://h:8081"
+    override fun read(): String = "$SAMPLE_BASE_URL"
     override fun write(address: String) = Unit
 }
 
@@ -50,11 +57,11 @@ private object UnusedTransport : HttpTransport {
 
 private val sampleImage = ImageItem(
     name = "Broyna.webp",
-    path = "test-root/a/Broyna.webp",
-    relativeUrl = "/api/media?file=%2Ftest-root%2Fa%2FBroyna.webp",
+    path = "/root/a/Broyna.webp",
+    relativeUrl = "/api/media?file=%2Froot%2Fa%2FBroyna.webp",
     sizeText = "137.2 KB",
     modifiedIso = "2024-04-21T10:00:00Z",
-    absoluteUrl = "http://h:8081/api/media?file=%2Ftest-root%2Fa%2FBroyna.webp",
+    absoluteUrl = "$SAMPLE_BASE_URL/api/media?file=%2Froot%2Fa%2FBroyna.webp",
 )
 
 private fun holderWith(downloader: ImageDownloader): HomeStateHolder =
@@ -150,7 +157,7 @@ class DetailActionsTest {
         holder.downloadSelectedImage()
 
         // 换一张图：上一张的"已保存到相册"不能跟着显示到新图上
-        holder.openDetail(sampleImage.copy(name = "other.png", absoluteUrl = "http://h:8081/api/media?file=other"))
+        holder.openDetail(sampleImage.copy(name = "other.png", absoluteUrl = "$SAMPLE_BASE_URL/api/media?file=other"))
 
         assertEquals(DownloadUiState.Idle, holder.state.downloadState)
         assertNull(holder.state.actionHint)

@@ -15,6 +15,7 @@ import com.eightfs.lumigather.data.AuthTokenStore
 import com.eightfs.lumigather.data.HttpBytesResponse
 import com.eightfs.lumigather.data.HttpRawResponse
 import com.eightfs.lumigather.data.HttpTransport
+import com.eightfs.lumigather.data.UrlBuilder
 import kotlinx.coroutines.runBlocking
 import ui.screens.download.DownloadFailureKind
 import ui.screens.download.DownloadResult
@@ -27,17 +28,22 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+// 样本根路径：模拟服务端返回的分类绝对路径。
+// 必须是**绝对路径**形态（带前导斜杠）：真实服务端返回的就是 /volume6/... 这类绝对路径，
+// 换成相对形态会让"绝对路径"分支测不到（MediaSrc.normalize 的"补斜杠"分支会被当成主路径）。
+// 用 /root/xxx 这种明显的虚构绝对路径：既保持线上真实形态，又不含任何本机环境信息。
+private const val SAMPLE_ROOT_PATH = "/root/honkai"
 
 private const val NOW_MS = 1_704_067_200_000L
 
 private const val SITE_CONFIG_JSON = """
 {"title":"拾光集","fsRoot":"/root","imagesPerRow":20,
  "categories":[{"name":"崩坏3","label":"崩坏3","color":"#c084fc"}],
- "directories":[{"path":"test-root/honkai","category":"崩坏3"}]}
+ "directories":[{"path":"$SAMPLE_ROOT_PATH","category":"崩坏3"}]}
 """
 
 private const val EMPTY_IMAGES_JSON = """
-{"path":"test-root/honkai","root":"test-root/honkai","recursive":true,"count":0,"total":0,
+{"path":"$SAMPLE_ROOT_PATH","root":"$SAMPLE_ROOT_PATH","recursive":true,"count":0,"total":0,
  "offset":0,"limit":20,"returned":0,"images":[]}
 """
 
@@ -46,13 +52,13 @@ private const val STATUS_JSON = """{"ok":true,"version":"1.0.3"}"""
 // 两个包：一个 mod 包（hasIni+speed），一个普通图包；包内含中文/空格条目与一条穿越尝试
 private const val ZIPS_JSON = """
 {"ok":true,"zips":[
-  {"path":"test-root/honkai/mod.zip","name":"mod.zip",
+  {"path":"$SAMPLE_ROOT_PATH/mod.zip","name":"mod.zip",
    "images":["贴图 001.png","贴图 002.png","../escape.png"],"hasIni":true,"speed":1.5},
-  {"path":"test-root/honkai/plain.zip","name":"plain.zip","images":["a.webp"],"hasIni":false}
+  {"path":"$SAMPLE_ROOT_PATH/plain.zip","name":"plain.zip","images":["a.webp"],"hasIni":false}
 ]}
 """
 
-private class FixedAddressStore(private var address: String = "http://h:8081") : ServerAddressStore {
+private class FixedAddressStore(private var address: String = "http://server.test") : ServerAddressStore {
     override fun read(): String = address
     override fun write(address: String) {
         this.address = address
@@ -138,7 +144,7 @@ class ArchiveFlowTest {
         assertEquals(1.5, archives[0].speed)
         assertFalse(archives[1].hasIni)
         // 目录取自当前分类的绝对路径
-        assertEquals("test-root/honkai", stateHolder.state.archiveDir)
+        assertEquals("$SAMPLE_ROOT_PATH", stateHolder.state.archiveDir)
     }
 
     @Test
@@ -169,7 +175,11 @@ class ArchiveFlowTest {
         assertEquals(2, images.size, "含 .. 的条目应被客户端提前排除")
         val url = images[0].absoluteUrl
         assertTrue(url.contains("/api/zip/img"), "应指向包内图片接口，实际：$url")
-        assertTrue(url.contains("path=test-root%2Fhonkai%2Fmod.zip"), "zip 路径要编码，实际：$url")
+        // 期望值由生产编码器算出来，而不是手写一段 %XX：手写的编码串一旦常量变了就静默失配
+        assertTrue(
+            url.contains("path=" + UrlBuilder.percentEncode("$SAMPLE_ROOT_PATH/mod.zip")),
+            "zip 路径要按绝对路径编码（前导斜杠也编码），实际：$url",
+        )
         assertTrue(url.contains("%E8%B4%B4%E5%9B%BE"), "中文条目名要按 UTF-8 编码，实际：$url")
         assertTrue(url.contains("%20"), "条目名里的空格要编码，实际：$url")
         assertEquals("贴图 001.png", images[0].name)
@@ -210,7 +220,10 @@ class ArchiveFlowTest {
 
         val url = (stateHolder.state.gifState as GifState.Generating).url
         assertTrue(url.contains("/api/gif"), "目录视图该用目录接口，实际：$url")
-        assertTrue(url.contains("dir=test-root%2Fhonkai"), "参数名必须是 dir，实际：$url")
+        assertTrue(
+            url.contains("dir=" + UrlBuilder.percentEncode(SAMPLE_ROOT_PATH)),
+            "参数名必须是 dir，且绝对路径的斜杠要编码，实际：$url",
+        )
     }
 
     @Test
@@ -246,7 +259,7 @@ class ArchiveFlowTest {
         assertTrue(stateHolder.state.archives.isNotEmpty())
 
         stateHolder.openSettings()
-        stateHolder.updateAddressDraft("http://other:8081")
+        stateHolder.updateAddressDraft("http://other:9000")
         stateHolder.saveAddress()
 
         assertEquals("", stateHolder.state.archiveDir, "换服务器后目录要清")

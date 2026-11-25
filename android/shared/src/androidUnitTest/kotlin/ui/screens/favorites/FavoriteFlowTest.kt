@@ -25,20 +25,30 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+// 样本服务端地址：用 RFC 2606 保留域名 .test，既不写真实部署地址，也不写真实端口
+private const val SAMPLE_BASE_URL = "http://server.test"
+// 样本根路径：模拟服务端返回的分类绝对路径。
+// 必须是**绝对路径**形态（带前导斜杠）：真实服务端返回的就是 /volume6/... 这类绝对路径，
+// 换成相对形态会让"绝对路径"分支测不到（MediaSrc.normalize 的"补斜杠"分支会被当成主路径）。
+// 用 /root/xxx 这种明显的虚构绝对路径：既保持线上真实形态，又不含任何本机环境信息。
+private const val SAMPLE_ROOT_PATH = "/root/honkai"
+
+// 样本分类名：站点配置 fixture 与断言共用一份，改的时候只改这里
+private const val SAMPLE_CATEGORY_NAME = "崩坏3"
 
 private const val NOW_MS = 1_704_067_200_000L
 private const val ONE_HOUR_MS = 3_600_000L
 
 private const val SITE_CONFIG_JSON = """
 {"title":"拾光集","fsRoot":"/root","imagesPerRow":20,
- "categories":[{"name":"崩坏3","label":"崩坏3","color":"#c084fc"}],
- "directories":[{"path":"test-root/honkai","category":"崩坏3"}]}
+ "categories":[{"name":"$SAMPLE_CATEGORY_NAME","label":"$SAMPLE_CATEGORY_NAME","color":"#c084fc"}],
+ "directories":[{"path":"$SAMPLE_ROOT_PATH","category":"$SAMPLE_CATEGORY_NAME"}]}
 """
 
 private const val IMAGES_JSON = """
-{"path":"test-root/honkai","root":"test-root/honkai","recursive":true,"count":1,"total":1,
+{"path":"$SAMPLE_ROOT_PATH","root":"$SAMPLE_ROOT_PATH","recursive":true,"count":1,"total":1,
  "offset":0,"limit":20,"returned":1,
- "images":[{"name":"a.png","path":"test-root/honkai/a.png","url":"/api/media?file=%2Fa.png",
+ "images":[{"name":"a.png","path":"$SAMPLE_ROOT_PATH/a.png","url":"/api/media?file=%2Fa.png",
             "size":"1.0 KB","modified":"2023-08-18T06:56:03.097Z"}]}
 """
 
@@ -47,13 +57,13 @@ private const val STATUS_JSON = """{"ok":true,"version":"1.0.3","needsAuth":true
 // 选中的那张图（与 IMAGES_JSON 同一条，便于验证"当前图是否已收藏"）
 private val selectedImage = ImageItem(
     name = "a.png",
-    path = "test-root/honkai/a.png",
+    path = "$SAMPLE_ROOT_PATH/a.png",
     relativeUrl = "/api/media?file=%2Fa.png",
     sizeText = "1.0 KB",
-    absoluteUrl = "http://h:8081/api/media?file=%2Fa.png",
+    absoluteUrl = "$SAMPLE_BASE_URL/api/media?file=%2Fa.png",
 )
 
-private class FixedAddressStore(private val address: String = "http://h:8081") : ServerAddressStore {
+private class FixedAddressStore(private val address: String = "$SAMPLE_BASE_URL") : ServerAddressStore {
     override fun read(): String = address
     override fun write(address: String) = Unit
 }
@@ -174,7 +184,7 @@ class FavoriteFlowTest {
     fun loggedInAddsFavoriteWithNormalizedSrcAndBearerToken() = runBlocking {
         val transport = FavoritesTransport(
             addResponse = """{"ok":true,"favorites":[
-                {"src":"/api/media?file=%2Fa.png","name":"a.png","cat":"崩坏3"}]}""",
+                {"src":"/api/media?file=%2Fa.png","name":"a.png","cat":"$SAMPLE_CATEGORY_NAME"}]}""",
         )
         val stateHolder = holder(transport)
         stateHolder.bootstrap()
@@ -235,7 +245,7 @@ class FavoriteFlowTest {
     fun absoluteUrlInStoredFavoriteStillMatchesRelativeSelection() = runBlocking {
         // 旧数据：src 存的是完整 URL（换端口就会裂的那种）；当前选中图给的是相对路径
         val transport = FavoritesTransport(
-            favoritesJson = """[{"src":"http://h:8081/api/media?file=%2Fa.png","name":"a.png"}]""",
+            favoritesJson = """[{"src":"$SAMPLE_BASE_URL/api/media?file=%2Fa.png","name":"a.png"}]""",
         )
         val stateHolder = holder(transport)
         stateHolder.bootstrap()
@@ -252,7 +262,7 @@ class FavoriteFlowTest {
         val transport = FavoritesTransport(
             favoritesJson = """[
                 {"src":"/api/media?file=%2Fa.png","name":"a.png"},
-                {"src":"http://h:8081/api/media?file=%2Fa.png","name":"a.png"}]""",
+                {"src":"$SAMPLE_BASE_URL/api/media?file=%2Fa.png","name":"a.png"}]""",
         )
         val stateHolder = holder(transport)
         stateHolder.bootstrap()
@@ -298,7 +308,7 @@ class FavoriteFlowTest {
 
         stateHolder.selectView(HomeView.All)
         assertEquals(HomeView.All, stateHolder.state.view)
-        assertEquals("崩坏3", stateHolder.state.selectedCategory, "切回分类视图应保留原分类")
+        assertEquals("$SAMPLE_CATEGORY_NAME", stateHolder.state.selectedCategory, "切回分类视图应保留原分类")
         assertEquals(1, stateHolder.state.gridImages.size)
     }
 
@@ -314,7 +324,7 @@ class FavoriteFlowTest {
         transport.favoritesResponses.add("[]")
 
         val addressStore = object : ServerAddressStore {
-            private var address = "http://h:8081"
+            private var address = "$SAMPLE_BASE_URL"
             override fun read(): String = address
             override fun write(address: String) {
                 this.address = address
@@ -336,7 +346,7 @@ class FavoriteFlowTest {
         val getsBeforeSwitch = transport.favoritesGetCount
 
         stateHolder.openSettings()
-        stateHolder.updateAddressDraft("http://other:8081")
+        stateHolder.updateAddressDraft("http://other:9000")
         stateHolder.saveAddress()
 
         assertEquals(HomeView.All, stateHolder.state.view, "换服务器后视图应回默认分类视图")
