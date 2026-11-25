@@ -20,7 +20,7 @@ import ui.screens.download.DownloadResult
 import ui.screens.download.ImageDownloader
 import ui.screens.settings.ServerAddressStore
 import ui.screens.state.HomeStateHolder
-import ui.screens.state.HomeView
+import ui.screens.state.ContentFilter
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -97,6 +97,8 @@ private class FavoritesTransport(
 
     var favoriteWriteCount: Int = 0
     var favoritesGetCount: Int = 0
+    // 图片列表请求次数：用来验"点当前分类只收侧栏、不重复拉数据"
+    var imagesGetCount: Int = 0
     var lastWriteBody: String = ""
     var lastWriteMethod: String = ""
     var lastAuthHeader: String? = null
@@ -107,7 +109,10 @@ private class FavoritesTransport(
     override suspend fun get(url: String, query: Map<String, String>, timeoutMs: Long): HttpRawResponse =
         when {
             url.endsWith("/api/lumigather") -> HttpRawResponse(200, SITE_CONFIG_JSON, "application/json")
-            url.endsWith("/api/images") -> HttpRawResponse(200, IMAGES_JSON, "application/json")
+            url.endsWith("/api/images") -> {
+                imagesGetCount += 1
+                HttpRawResponse(200, IMAGES_JSON, "application/json")
+            }
             url.endsWith("/api/status") -> HttpRawResponse(200, STATUS_JSON, "application/json")
             // 注意：这两个返回的是裸数组，正是要验的契约
             url.endsWith("/api/favorites") -> {
@@ -295,20 +300,20 @@ class FavoriteFlowTest {
         )
         val stateHolder = holder(transport)
         stateHolder.bootstrap()
-        assertEquals(HomeView.All, stateHolder.state.view)
+        assertEquals(ContentFilter.Category(SAMPLE_CATEGORY_NAME), stateHolder.state.filter)
 
-        stateHolder.selectView(HomeView.Favorites)
-        assertEquals(HomeView.Favorites, stateHolder.state.view)
+        stateHolder.selectFilter(ContentFilter.Favorites)
+        assertEquals(ContentFilter.Favorites, stateHolder.state.filter)
         assertEquals(1, stateHolder.state.gridImages.size, "收藏视图的网格应来自收藏列表")
         assertEquals("收藏 · 1", stateHolder.state.contentSubtitle)
 
-        stateHolder.selectView(HomeView.Guest)
-        assertEquals(HomeView.Guest, stateHolder.state.view)
+        stateHolder.selectFilter(ContentFilter.Guest)
+        assertEquals(ContentFilter.Guest, stateHolder.state.filter)
         assertEquals(1, stateHolder.state.gridImages.size, "游客视图的网格应来自上传列表")
 
-        stateHolder.selectView(HomeView.All)
-        assertEquals(HomeView.All, stateHolder.state.view)
-        assertEquals("$SAMPLE_CATEGORY_NAME", stateHolder.state.selectedCategory, "切回分类视图应保留原分类")
+        stateHolder.selectFilter(ContentFilter.Category(SAMPLE_CATEGORY_NAME))
+        assertEquals(ContentFilter.Category(SAMPLE_CATEGORY_NAME), stateHolder.state.filter)
+        assertEquals(SAMPLE_CATEGORY_NAME, stateHolder.state.currentCategoryName, "切回分类应保留原分类")
         assertEquals(1, stateHolder.state.gridImages.size)
     }
 
@@ -341,7 +346,7 @@ class FavoriteFlowTest {
         )
 
         stateHolder.bootstrap()
-        stateHolder.selectView(HomeView.Favorites)
+        stateHolder.selectFilter(ContentFilter.Favorites)
         assertEquals(1, stateHolder.state.favoriteImages.size, "前提：第一台服务器上有一条收藏")
         val getsBeforeSwitch = transport.favoritesGetCount
 
@@ -349,7 +354,7 @@ class FavoriteFlowTest {
         stateHolder.updateAddressDraft("http://other:9000")
         stateHolder.saveAddress()
 
-        assertEquals(HomeView.All, stateHolder.state.view, "换服务器后视图应回默认分类视图")
+        assertEquals(ContentFilter.Category(SAMPLE_CATEGORY_NAME), stateHolder.state.filter, "换服务器后应回到默认分类")
         assertEquals(
             0,
             stateHolder.state.favoriteImages.size,
@@ -361,6 +366,60 @@ class FavoriteFlowTest {
         )
     }
 
+    /**
+     * 回归：选中「收藏」后再点某个游戏分类，必须真的切过去。
+     *
+     * 这是把 view + selectedCategory 两个字段合并成单一 filter 的直接原因 ——
+     * 旧模型下点分类只改了 selectedCategory，view 还停在 Favorites，界面显示的还是收藏列表。
+     */
+    @Test
+    fun switchingFromFavoritesToCategoryFlipsFilterAndDataSource() = runBlocking {
+        val transport = FavoritesTransport(
+            favoritesJson = """[{"src":"/api/media?file=%2Ffav-only.png","name":"fav-only.png"}]""",
+        )
+        val stateHolder = holder(transport)
+        stateHolder.bootstrap()
+        stateHolder.selectFilter(ContentFilter.Favorites)
+        assertEquals(ContentFilter.Favorites, stateHolder.state.filter)
+        assertEquals("fav-only.png", stateHolder.state.gridImages.single().name, "前提：此时网格是收藏列表")
+
+        // 点分类
+        stateHolder.selectFilter(ContentFilter.Category(SAMPLE_CATEGORY_NAME))
+
+        assertEquals(
+            ContentFilter.Category(SAMPLE_CATEGORY_NAME),
+            stateHolder.state.filter,
+            "点分类后筛选值必须变成该分类",
+        )
+        assertEquals(
+            "a.png",
+            stateHolder.state.gridImages.single().name,
+            "网格数据源必须切到分类图片（而不是还挂着收藏项）",
+        )
+        assertEquals(SAMPLE_CATEGORY_NAME, stateHolder.state.currentCategoryName)
+    }
+
+    /**
+     * 优化守门：重复点「当前分类」只收左栏，不重新拉数据。
+     *
+     * 侧栏收起来是为了让用户马上看到内容；再拉一遍既浪费请求，也会让网格闪一下。
+     */
+    @Test
+    fun clickingCurrentCategoryOnlyClosesSidebarWithoutReload() = runBlocking {
+        val transport = FavoritesTransport()
+        val stateHolder = holder(transport)
+        stateHolder.bootstrap()
+        stateHolder.selectFilter(ContentFilter.Category(SAMPLE_CATEGORY_NAME))
+        val requestsAfterSwitch = transport.imagesGetCount
+        stateHolder.openLeftSidebar()
+
+        // 再点一次当前分类
+        stateHolder.selectFilter(ContentFilter.Category(SAMPLE_CATEGORY_NAME))
+
+        assertEquals(requestsAfterSwitch, transport.imagesGetCount, "点当前分类不该重新拉图片")
+        assertFalse(stateHolder.state.leftSidebarOpen, "但左栏要收起来")
+    }
+
     @Test
     fun emptyStateTextDiffersPerView() = runBlocking {
         val transport = FavoritesTransport(favoritesJson = "[]", uploadedJson = "[]")
@@ -368,9 +427,9 @@ class FavoriteFlowTest {
         stateHolder.bootstrap()
 
         assertEquals("这个分类还没有图片", stateHolder.state.gridEmptyTitle)
-        stateHolder.selectView(HomeView.Favorites)
+        stateHolder.selectFilter(ContentFilter.Favorites)
         assertEquals("还没有收藏的图片", stateHolder.state.gridEmptyTitle)
-        stateHolder.selectView(HomeView.Guest)
+        stateHolder.selectFilter(ContentFilter.Guest)
         assertEquals("还没有游客上传的图片", stateHolder.state.gridEmptyTitle)
     }
 }

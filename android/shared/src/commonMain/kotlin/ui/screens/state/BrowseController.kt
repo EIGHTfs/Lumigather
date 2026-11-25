@@ -2,7 +2,6 @@
 //
 // 它是这次拆分里最大的一块，因为"看图"本来就是主流程。依赖依然只有状态通道 + 一个仓库 provider；
 // 三处跨功能的动作通过回调交出去，而不是直接调用别的子状态机：
-//   - [onCategorySelected]：切分类要顺手收侧栏（侧栏归侧栏子状态机管）；
 //   - [onServerNeedsSetup]：服务器是否设过密码（登录态归登录子状态机管）；
 //   - [onServerReady]：能拉到分类 = 这台服务器可用了（设置态归设置子状态机管）；
 //   - [onNeedsBootstrap]：连仓库都没有（地址未配置）时，整条启动链路该重跑（facade 管地址）。
@@ -22,7 +21,6 @@ class BrowseController(
     private val channel: StateChannel,
     private val repositoryProvider: () -> LumigatherRepository?,
     private val onNeedsBootstrap: suspend () -> Unit,
-    private val onCategorySelected: (switched: Boolean) -> Unit,
     private val onServerNeedsSetup: (needsSetup: Boolean) -> Unit,
     private val onServerReady: () -> Unit,
 ) {
@@ -51,7 +49,8 @@ class BrowseController(
                         isLoadingCategories = false,
                         categories = categories,
                         serverTitle = activeRepository.title,
-                        selectedCategory = firstCategory?.name.orEmpty(),
+                        // 拉到分类就默认看第一个：筛选值是"分类"这一支，界面立刻有内容可看
+                        filter = ContentFilter.Category(firstCategory?.name.orEmpty()),
                     )
                 }
                 // 能拉到分类说明这台服务器可用：让设置态知道"现在有地址可退回了"
@@ -64,17 +63,13 @@ class BrowseController(
     }
 
     /**
-     * 切换分类。选的是当前分类且已有图时，只是把左栏收起来（用户点完就想看结果）；
-     * 真正换分类则连右侧详情一起收起并清掉选中项 —— 旧图已经不属于新分类了。
+     * 加载某个分类的第一页。
+     *
+     * 这里**不再设置筛选值**：筛选值只有一个写入口（facade 的 selectFilter），
+     * 浏览子状态机只负责"把某个分类的图拉回来"。这样就不存在"改了分类却忘了改视图"的可能 ——
+     * 那不是靠这里补一句 `filter = ...` 解决的，而是靠"不允许第二个地方写它"。
      */
-    suspend fun selectCategory(categoryName: String) {
-        val current = channel.state
-        if (categoryName == current.selectedCategory && current.images.isNotEmpty()) {
-            onCategorySelected(false)
-            return
-        }
-        channel.mutate { it.copy(selectedCategory = categoryName) }
-        onCategorySelected(true)
+    suspend fun loadCategory(categoryName: String) {
         loadFirstPage(categoryName)
     }
 
@@ -83,11 +78,11 @@ class BrowseController(
         val current = channel.state
         val activeRepository = repositoryProvider() ?: return
         if (current.isLoadingMore || current.isLoadingPage || !current.hasMore) return
-        if (current.selectedCategory.isEmpty()) return
+        val categoryName = current.currentCategoryName ?: return
 
         channel.mutate { it.copy(isLoadingMore = true) }
         when (val result = activeRepository.loadPageForCategory(
-            categoryName = current.selectedCategory,
+            categoryName = categoryName,
             offset = current.loadedCount,
             limit = DEFAULT_PAGE_SIZE,
         )) {
@@ -103,11 +98,12 @@ class BrowseController(
             return
         }
         val current = channel.state
-        if (current.categories.isEmpty() || current.selectedCategory.isEmpty()) {
+        val categoryName = current.currentCategoryName
+        if (current.categories.isEmpty() || categoryName == null) {
             refreshContent()
             return
         }
-        loadFirstPage(current.selectedCategory)
+        loadFirstPage(categoryName)
     }
 
     /**
@@ -121,7 +117,7 @@ class BrowseController(
             it.copy(
                 categories = emptyList(),
                 images = emptyList(),
-                selectedCategory = "",
+                filter = ContentFilter.Category(""),
                 categoryError = null,
                 pageError = null,
                 isLoadingCategories = true,

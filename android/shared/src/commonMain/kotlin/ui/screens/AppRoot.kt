@@ -239,7 +239,7 @@ private fun MainScaffold(
                 state = state,
                 gridGestureModifier = gridDragModifier,
                 onOpenLeftSidebar = stateHolder::openLeftSidebar,
-                onSelectCategory = { categoryName -> scope.launch { stateHolder.selectCategory(categoryName) } },
+                onSelectFilter = { filter -> scope.launch { stateHolder.selectFilter(filter) } },
                 onOpenImage = stateHolder::openDetail,
                 onLoadMore = { scope.launch { stateHolder.loadMore() } },
                 onRetry = { scope.launch { stateHolder.retry() } },
@@ -270,8 +270,8 @@ private fun MainScaffold(
         if (leftProgress > 0f) {
             LeftSidebar(
                 state = state,
-                onSelectCategory = { categoryName -> scope.launch { stateHolder.selectCategory(categoryName) } },
-                onSelectView = { view -> scope.launch { stateHolder.selectView(view) } },
+                // 分类行与虚拟视图行共用同一个入口（筛选值只有一个）
+                onSelectFilter = { filter -> scope.launch { stateHolder.selectFilter(filter) } },
                 onQueryChange = stateHolder::updateSearchQuery,
                 onClose = stateHolder::closeSidebars,
                 modifier = Modifier

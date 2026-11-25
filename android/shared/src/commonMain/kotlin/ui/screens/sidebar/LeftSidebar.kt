@@ -41,13 +41,13 @@ import ui.components.AppIconButton
 import ui.components.AppListRow
 import ui.screens.HomeLayout
 import ui.screens.state.HomeUiState
-import ui.screens.state.HomeView
+import ui.screens.state.ContentFilter
 
 @Composable
 fun LeftSidebar(
     state: HomeUiState,
-    onSelectCategory: (String) -> Unit,
-    onSelectView: (HomeView) -> Unit,
+    // 唯一的内容切换入口：分类行与「收藏 / 游客」行都调它（一个值决定看什么，互斥天然成立）
+    onSelectFilter: (ContentFilter) -> Unit,
     onQueryChange: (String) -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
@@ -78,7 +78,7 @@ fun LeftSidebar(
         )
         SearchField(query = state.searchQuery, onQueryChange = onQueryChange)
         // 两个虚拟视图放在分类分区之上：它们是"另一套数据源"，不是某个分类，位置也要在视觉上先于分类
-        VirtualViewRows(state = state, onSelectView = onSelectView)
+        VirtualViewRows(state = state, onSelectFilter = onSelectFilter)
         SectionTitle(
             text = sectionTitle(
                 totalCategoryCount = state.categories.size,
@@ -89,7 +89,7 @@ fun LeftSidebar(
         // weight 只有在 Column 作用域里才可用，所以必须在这里传进去，不能让列表函数自己带
         CategoryList(
             state = state,
-            onSelectCategory = onSelectCategory,
+            onSelectFilter = onSelectFilter,
             modifier = Modifier.weight(1f),
         )
         SidebarFooter(state = state)
@@ -228,7 +228,7 @@ private fun SearchIcon() {
 @Composable
 private fun CategoryList(
     state: HomeUiState,
-    onSelectCategory: (String) -> Unit,
+    onSelectFilter: (ContentFilter) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val metrics = AppTheme.metrics
@@ -259,11 +259,11 @@ private fun CategoryList(
                 label = category.label.ifBlank { category.name },
                 color = category.color,
                 imageCount = category.imageCount,
-                // 只有分类视图下分类才算选中：收藏/游客被选中时，全部分类行自动变回未选中，
-                // 互斥不靠"切视图时记得清 selectedCategory"，而是靠这里的一次判断
-                selected = state.view == HomeView.All && category.name == state.selectedCategory,
+                // 选中判断直接比对筛选值：收藏/游客被选中时全部分类行自动变回未选中 ——
+                // 互斥由单值模型保证，不需要任何"切的时候记得清"的代码
+                selected = state.filter == ContentFilter.Category(category.name),
                 countState = category.countState,
-                onClick = { onSelectCategory(category.name) },
+                onClick = { onSelectFilter(ContentFilter.Category(category.name)) },
             )
         }
     }
@@ -278,7 +278,7 @@ private fun CategoryList(
  * 数量直接用已加载列表的条数：它来自服务端列表本身，不会出现"数字说有 12 张、点进去是空的"。
  */
 @Composable
-private fun VirtualViewRows(state: HomeUiState, onSelectView: (HomeView) -> Unit) {
+private fun VirtualViewRows(state: HomeUiState, onSelectFilter: (ContentFilter) -> Unit) {
     val metrics = AppTheme.metrics
 
     Column(verticalArrangement = Arrangement.spacedBy(metrics.spacingSm)) {
@@ -286,15 +286,15 @@ private fun VirtualViewRows(state: HomeUiState, onSelectView: (HomeView) -> Unit
             glyph = GLYPH_FAVORITE,
             title = "收藏",
             count = state.favoriteImages.size,
-            selected = state.view == HomeView.Favorites,
-            onClick = { onSelectView(HomeView.Favorites) },
+            selected = state.filter == ContentFilter.Favorites,
+            onClick = { onSelectFilter(ContentFilter.Favorites) },
         )
         VirtualViewRow(
             glyph = GLYPH_GUEST,
             title = "游客",
             count = state.guestImages.size,
-            selected = state.view == HomeView.Guest,
-            onClick = { onSelectView(HomeView.Guest) },
+            selected = state.filter == ContentFilter.Guest,
+            onClick = { onSelectFilter(ContentFilter.Guest) },
         )
     }
 }

@@ -72,12 +72,21 @@ data class AuthUiState(
 )
 
 /**
- * 网格当前展示哪一套数据。
+ * 当前"在看什么"：某个游戏分类 / 收藏 / 游客上传。
  *
- * 用一个枚举而不是三个布尔：互斥这件事由类型本身保证 —— 「收藏被选中时分类必须不选中」
- * 不需要任何清理代码，页面判断 selected 时写 `view == All && ...` 就永远不会两处同时亮。
+ * 为什么是**一个值**而不是「视图类型 + 选中分类」两个字段：
+ * 两个字段要靠人工保持同步，任何一条切换路径漏改一处，界面就会停在
+ * 「视图是收藏、分类是刚点的那个」这种半状态（实测过的 bug：选中收藏后点分类切不过去）。
+ * 单值模型下一个变量只能是一个值，互斥天然成立，不存在"记得同时改"这回事。
+ *
+ * 刻意不设 All 变体：本项目左栏没有"全部概览"入口，任何时候总有一个具体内容在看；
+ * 再加一个 All 就又多出一个需要与"选中分类"对齐的第三态，等于把问题搬回去。
  */
-enum class HomeView { All, Favorites, Guest }
+sealed interface ContentFilter {
+    data class Category(val name: String) : ContentFilter
+    data object Favorites : ContentFilter
+    data object Guest : ContentFilter
+}
 
 /**
  * 整屏的完整状态。任何时刻界面都是它的一个纯函数。
@@ -91,7 +100,9 @@ data class HomeUiState(
     val serverVersion: String = "",
     val online: Boolean = false,
     val categories: List<CategoryView> = emptyList(),
-    val selectedCategory: String = "",
+    // 唯一的内容筛选值。初始 Category("") = "分类还没加载出来"，由浏览子状态机在
+    // 拉到分类后立刻换成第一个分类的名字
+    val filter: ContentFilter = ContentFilter.Category(""),
     val images: List<ImageItem> = emptyList(),
     val isLoadingCategories: Boolean = true,
     // 首页第一页：只有它的转圈要占满内容区，翻页的转圈只出现在网格尾部
@@ -132,9 +143,7 @@ data class HomeUiState(
     val loginState: LoginUiState = LoginUiState.Idle,
     // 失败后的冷却期（后端没有失败限流，前端用这个挡住连点）
     val loginBlocked: Boolean = false,
-    // ---- 收藏 / 游客视图 ----
-    // 网格当前展示哪一套数据（三视图互斥由枚举保证）
-    val view: HomeView = HomeView.All,
+    // ---- 收藏 / 游客数据（展示哪一套由 filter 决定，不另设开关）----
     val favoriteImages: List<ImageItem> = emptyList(),
     // 收藏条目的规范化 src 集合：判断"当前这张图收没收藏"用它（O(1)，且不依赖列表顺序）
     val favoriteSrcs: Set<String> = emptySet(),
@@ -165,8 +174,21 @@ data class HomeUiState(
             return categories.filter { it.label.contains(keyword, ignoreCase = true) }
         }
 
+    /**
+     * 当前选中的分类名（筛选值不是分类时给 null）。
+     *
+     * 这是"分类"这个概念在状态里的**唯一出口**：分页、顶栏标题、切分类的判重都从这里取名，
+     * 不再有第二个字段可以与之不一致。
+     */
+    val currentCategoryName: String?
+        get() = (filter as? ContentFilter.Category)?.name?.takeIf { it.isNotEmpty() }
+
     val selectedCategoryView: CategoryView?
-        get() = categories.firstOrNull { it.name == selectedCategory }
+        get() = currentCategoryName?.let { name -> categories.firstOrNull { it.name == name } }
+
+    // 是否"按分类看内容"：分类加载态、分页哨兵这些只对分类视图有意义
+    val isCategoryFilter: Boolean
+        get() = filter is ContentFilter.Category
 
     // 底部状态栏文案。连上了还要区分"服务端自报 ok=false"（进程活着但状态异常）。
     val statusText: String
@@ -174,8 +196,8 @@ data class HomeUiState(
 
     // 顶栏副标题：随视图切换 —— 分类视图给"分类名 · 已加载/总数"，收藏/游客给"名称 · 条数"
     val contentSubtitle: String
-        get() = when (view) {
-            HomeView.All -> {
+        get() = when (filter) {
+            is ContentFilter.Category -> {
                 val categoryName = selectedCategoryView?.label.orEmpty()
                 when {
                     categoryName.isEmpty() -> "正在读取分类"
@@ -184,40 +206,40 @@ data class HomeUiState(
                 }
             }
 
-            HomeView.Favorites -> "收藏 · ${favoriteImages.size}"
-            HomeView.Guest -> "游客 · ${guestImages.size}"
+            ContentFilter.Favorites -> "收藏 · ${favoriteImages.size}"
+            ContentFilter.Guest -> "游客 · ${guestImages.size}"
         }
 
     // ---- 三视图的唯一出口：页面只读这几个派生值，不再自己判断 view ----
 
     // 网格数据：分类图 / 收藏 / 游客上传
     val gridImages: List<ImageItem>
-        get() = when (view) {
-            HomeView.All -> images
-            HomeView.Favorites -> favoriteImages
-            HomeView.Guest -> guestImages
+        get() = when (filter) {
+            is ContentFilter.Category -> images
+            ContentFilter.Favorites -> favoriteImages
+            ContentFilter.Guest -> guestImages
         }
 
     val gridLoading: Boolean
-        get() = when (view) {
-            HomeView.All -> isLoadingPage
-            HomeView.Favorites -> favoritesLoading
-            HomeView.Guest -> guestLoading
+        get() = when (filter) {
+            is ContentFilter.Category -> isLoadingPage
+            ContentFilter.Favorites -> favoritesLoading
+            ContentFilter.Guest -> guestLoading
         }
 
     // 空态文案：三套数据"为什么没有"的原因不同，用同一句会让人以为收藏坏了
     val gridEmptyTitle: String
-        get() = when (view) {
-            HomeView.All -> "这个分类还没有图片"
-            HomeView.Favorites -> "还没有收藏的图片"
-            HomeView.Guest -> "还没有游客上传的图片"
+        get() = when (filter) {
+            is ContentFilter.Category -> "这个分类还没有图片"
+            ContentFilter.Favorites -> "还没有收藏的图片"
+            ContentFilter.Guest -> "还没有游客上传的图片"
         }
 
     val gridEmptyHint: String
-        get() = when (view) {
-            HomeView.All -> "试试左上角换一个分类"
-            HomeView.Favorites -> "在图片详情里点「收藏」，就会出现在这里"
-            HomeView.Guest -> "游客上传区目前是空的"
+        get() = when (filter) {
+            is ContentFilter.Category -> "试试左上角换一个分类"
+            ContentFilter.Favorites -> "在图片详情里点「收藏」，就会出现在这里"
+            ContentFilter.Guest -> "游客上传区目前是空的"
         }
 
     // 当前详情图是否已收藏：按规范化 src 比对（原始写法可能是完整 URL，直接比会永远不相等）
@@ -346,7 +368,6 @@ class HomeStateHolder(
         channel = this,
         repositoryProvider = { repository },
         onNeedsBootstrap = { bootstrap() },
-        onCategorySelected = ::handleCategorySelected,
         onServerNeedsSetup = authController::applyServerNeedsSetup,
         onServerReady = settings::markAddressSaved,
     )
@@ -429,8 +450,9 @@ class HomeStateHolder(
         // 压缩包路径、包内图片、已合成的 GIF 同理：留着每条都点不开
         archive.resetArchive()
         sidebar.resetSearch()
-        // 视图回默认分类视图：新服务器上原来停在"收藏"页多半是空的，停在空页会让人以为收藏丢了
-        mutate { it.copy(view = HomeView.All) }
+        // 筛选回"空分类"：新服务器上原来停在收藏页多半是空的，停在空页会让人以为收藏丢了；
+        // 置成空分类后，接下来重拉分类时会被浏览子状态机换成第一个分类
+        mutate { it.copy(filter = ContentFilter.Category("")) }
         attachRepository(address, forceRebuild = true)
     }
 
@@ -446,17 +468,49 @@ class HomeStateHolder(
         sidebar.clearSelectedImage()
     }
 
-    // 切换分类：具体流程（分页重置、首屏重拉）在浏览子状态机里；收侧栏由它回调本类编排
     /**
-     * 切到某个分类：图片列表与压缩包扫描**并行**发起。
+     * 唯一的内容切换入口：左栏的分类行与「收藏 / 游客」行都调它。
+     *
+     * 只接受一个筛选值，所以"切了一半"不可能发生 —— 这就是把 view + selectedCategory
+     * 两个字段合并的真实收益，而不是"补一句记得同时改"。
+     *
+     * 重复点当前项时只收左栏、不重复拉数据（用户点它是想收起列表看结果）。
+     */
+    suspend fun selectFilter(target: ContentFilter) {
+        // 判据：点的就是当前筛选，且这份数据已经有内容 → 只收左栏
+        if (target == state.filter && state.gridImages.isNotEmpty()) {
+            sidebar.closeLeftSidebar()
+            return
+        }
+
+        // 换筛选：两侧栏都收、清掉选中图（旧图不属于新内容），提示也一并清掉
+        mutate {
+            it.copy(
+                filter = target,
+                leftSidebarOpen = false,
+                rightSidebarOpen = false,
+                selectedImage = null,
+                actionHint = null,
+            )
+        }
+
+        when (target) {
+            is ContentFilter.Category -> loadCategoryContent(target.name)
+            ContentFilter.Favorites -> favorite.loadFavorites()
+            ContentFilter.Guest -> favorite.loadGuestUploads()
+        }
+    }
+
+    /**
+     * 加载某个分类的内容：图片列表与压缩包扫描**并行**发起。
      *
      * 为什么并行：扫包要走服务端 spawn 7zz 列目录，明显比图片列表慢；两者互不依赖，
      * 串行会让网格白等。谁先回来谁先渲染。
      */
-    suspend fun selectCategory(categoryName: String) {
+    private suspend fun loadCategoryContent(categoryName: String) {
         val rootPath = state.categories.firstOrNull { it.name == categoryName }?.rootPath.orEmpty()
         coroutineScope {
-            launch { browse.selectCategory(categoryName) }
+            launch { browse.loadCategory(categoryName) }
             launch { archive.loadArchives(rootPath) }
         }
     }
@@ -469,20 +523,6 @@ class HomeStateHolder(
     // 重试：没配置就回设置态；分类没拿到就重跑主链路；只是图片页失败就只重拉当前页
     suspend fun retry() {
         browse.retry()
-    }
-
-    /**
-     * 分类被点了之后要收哪些侧栏（由浏览子状态机回调进来）。
-     *
-     * @param switched true=真的换了分类 → 两侧栏都收、选中图清掉（旧图不属于新分类）；
-     *                 false=只是又点了当前分类 → 只收左栏，右侧详情保持不动。
-     */
-    private fun handleCategorySelected(switched: Boolean) {
-        if (switched) {
-            sidebar.closeAndClearSelection()
-        } else {
-            sidebar.closeLeftSidebar()
-        }
     }
 
     // 侧栏开合与选中项：委托给侧栏子状态机
@@ -557,30 +597,6 @@ class HomeStateHolder(
     /** 把某个包内的条目名拼成可加载的图片模型（UI 直接用，不自己拼 URL）。 */
     fun zipImagesOf(entry: ArchiveEntry): List<ImageItem> = archive.zipImagesOf(entry)
 
-    /**
-     * 切换网格展示哪一套数据（分类 / 收藏 / 游客）。
-     *
-     * 互斥靠 [HomeView] 是单值枚举天然保证；这里只负责"切过去之后该做什么"：
-     * 回分类视图时如果分类还没加载过就补拉，收藏/游客每次切过去都重新拉（数据可能被别的设备改过）。
-     */
-    suspend fun selectView(target: HomeView) {
-        mutate {
-            it.copy(
-                view = target,
-                leftSidebarOpen = false,
-                rightSidebarOpen = false,
-                // 切换视图后原来选中的图可能不在新列表里了，一并收起详情，避免"详情挂着一张看不见的图"
-                selectedImage = null,
-                actionHint = null,
-            )
-        }
-        when (target) {
-            HomeView.All -> if (state.categories.isEmpty()) browse.refreshContent()
-            HomeView.Favorites -> favorite.loadFavorites()
-            HomeView.Guest -> favorite.loadGuestUploads()
-        }
-    }
-
     // ---- 登录底座：全部委托给登录子状态机 ----
 
     fun openLoginSheet() {
@@ -639,7 +655,7 @@ class HomeStateHolder(
     private suspend fun refreshContent() {
         browse.refreshContent()
         // 初次加载要等浏览子状态机选出第一个分类才知道目录，所以这里是"分类落定后立刻扫"；
-        // 用户切分类时走 selectCategory()，那条路径是真并行。
+        // 用户切分类时走 selectFilter()，那条路径是真并行。
         archive.loadArchives(state.selectedCategoryView?.rootPath.orEmpty())
     }
 

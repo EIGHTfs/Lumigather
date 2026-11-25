@@ -24,6 +24,7 @@ import ui.screens.download.DownloadFailureKind
 import ui.screens.download.DownloadResult
 import ui.screens.download.ImageDownloader
 import ui.screens.settings.ServerAddressStore
+import ui.screens.state.ContentFilter
 import ui.screens.state.GifState
 import ui.screens.state.HomeStateHolder
 import kotlin.test.Test
@@ -192,7 +193,7 @@ class ArchiveFlowTest {
         assertFalse(stateHolder.state.isArchiveCollapsed(plainZip), "折叠是按包记的，不能连带别的包")
 
         // 切一次分类再回来：折叠选择仍在（状态层持有，不是组件内临时变量）
-        stateHolder.selectCategory(SAMPLE_CATEGORY_NAME)
+        stateHolder.selectFilter(ContentFilter.Category(SAMPLE_CATEGORY_NAME))
         assertTrue(stateHolder.state.isArchiveCollapsed(modZip), "切分类后折叠状态应保留")
 
         stateHolder.toggleArchiveCollapsed(modZip.path)

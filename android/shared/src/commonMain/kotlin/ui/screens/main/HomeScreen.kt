@@ -43,13 +43,13 @@ import ui.components.AppLoading
 import ui.screens.HomeLayout
 import ui.screens.archive.ZipSection
 import ui.screens.state.HomeUiState
-import ui.screens.state.HomeView
+import ui.screens.state.ContentFilter
 
 @Composable
 fun HomeScreen(
     state: HomeUiState,
     onOpenLeftSidebar: () -> Unit,
-    onSelectCategory: (String) -> Unit,
+    onSelectFilter: (ContentFilter) -> Unit,
     onOpenImage: (ImageItem) -> Unit,
     onLoadMore: () -> Unit,
     onRetry: () -> Unit,
@@ -79,7 +79,7 @@ fun HomeScreen(
             onRetry = onRetry,
             onOpenSettings = onOpenSettings,
         )
-        CategoryChipsRow(state = state, onSelectCategory = onSelectCategory)
+        CategoryChipsRow(state = state, onSelectFilter = onSelectFilter)
 
         // weight(1f)：网格吃掉顶栏与底栏之外的全部高度，翻页与滚动都在这块里发生
         Box(modifier = Modifier.weight(1f).fillMaxWidth().then(gridGestureModifier)) {
@@ -185,7 +185,7 @@ private fun TitleCapsule(state: HomeUiState, modifier: Modifier = Modifier) {
 @Composable
 private fun CategoryChipsRow(
     state: HomeUiState,
-    onSelectCategory: (String) -> Unit,
+    onSelectFilter: (ContentFilter) -> Unit,
 ) {
     val colors = AppTheme.colors
     val metrics = AppTheme.metrics
@@ -202,9 +202,9 @@ private fun CategoryChipsRow(
             val category = state.categories[index]
             AppChip(
                 label = category.label.ifBlank { category.name },
-                selected = category.name == state.selectedCategory,
+                selected = state.filter == ContentFilter.Category(category.name),
                 dotColor = colorFromHex(category.color, colors.primary),
-                onClick = { onSelectCategory(category.name) },
+                onClick = { onSelectFilter(ContentFilter.Category(category.name)) },
             )
         }
     }
@@ -228,7 +228,7 @@ private fun HomeContent(
     val pageError = state.pageError
 
     // 收藏/游客视图没有"分类"概念，分类加载态与分类错误只对 All 视图有意义
-    val showCategoryStates = state.view == HomeView.All
+    val showCategoryStates = state.isCategoryFilter
 
     when {
         showCategoryStates && categoryError != null -> AppError(
@@ -304,7 +304,7 @@ private fun ImageGrid(
         }
 
         // 尾部一：分页哨兵（占满整行），只有分类视图有分页
-        if (state.view == HomeView.All && (state.hasMore || state.isLoadingMore)) {
+        if (state.isCategoryFilter && (state.hasMore || state.isLoadingMore)) {
             item(span = { GridItemSpan(maxLineSpan) }) {
                 LoadMoreFooter(
                     isLoadingMore = state.isLoadingMore,
