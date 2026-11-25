@@ -26,8 +26,10 @@ android {
         minSdk = 24
         // 32：Kuikly 渲染器与官方 demo 一致的 targetSdk，先跟随官方组合，后续要上架再单独评估
         targetSdk = 32
-        versionCode = 1119
-        versionName = "0.0.1-1119"
+        // versionCode 取日期（MMDD）而非递增序号：装错版本时一眼能看出新旧，
+        // 且不会因为忘记加一而出现「同 code 不同内容」的升级歧义。
+        versionCode = 1125
+        versionName = "0.0.2-1125"
     }
 
     // release 打包时跳过 lintVital。
