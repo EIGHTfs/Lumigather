@@ -296,14 +296,6 @@ private fun VirtualViewRows(state: HomeUiState, onSelectView: (HomeView) -> Unit
             selected = state.view == HomeView.Guest,
             onClick = { onSelectView(HomeView.Guest) },
         )
-        VirtualViewRow(
-            glyph = GLYPH_ARCHIVE,
-            title = "压缩包",
-            // 数字是"当前分类目录下扫到的包个数"，进视图时才扫描，所以未进过就是 0
-            count = state.archives.size,
-            selected = state.view == HomeView.Archive,
-            onClick = { onSelectView(HomeView.Archive) },
-        )
     }
 }
 
@@ -385,4 +377,3 @@ private const val HANDLE_END_RATIO = 0.94f
 // 且 HomeLayout 本轮不在改动范围内（避免为两个字形去动共享布局常量）。
 private const val GLYPH_FAVORITE = "♥"
 private const val GLYPH_GUEST = "☁"
-private const val GLYPH_ARCHIVE = "🗜"

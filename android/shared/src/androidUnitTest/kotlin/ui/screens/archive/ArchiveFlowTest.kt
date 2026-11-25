@@ -1,10 +1,13 @@
-// 压缩包与序列帧的测试：scan、包内 URL 拼装（含条目名转义）、GIF 生成态/失败原因、换服务器清理、防重复。
+// 压缩包区块的测试：扫当前目录、过滤空包、折叠、包级 GIF、换服务器清理、真·空目录判定。
 //
-// 这些点全都"不报错但结果是错的"，只能靠断言抓：
-// - 条目名不编码 → 中文/空格文件名请求不到（服务端当成别的条目）；
-// - `..` 不拦 → 网格里挂一堆必然 400 的图；
-// - GIF 失败时不去问服务端原因 → 用户只看到"合成失败"，不知道是"没序列帧"还是"网络断了"；
-// - 换服务器不清 → 上一台服务器的包名还在列表里，点开必失败。
+// 形态前提（对齐网页版）：压缩包**不是独立视图**，是"当前目录内容"的一部分 ——
+// 图片网格之后追加的一组可折叠包。所以这里的断言都围绕"当前目录"而不是"某个视图"。
+//
+// 这些点全是"不报错但结果是错的"，只能靠断言抓：
+// - 扫错目录 → 显示别的分类的包，点开必失败；
+// - 不过滤空包 → 一片点开是空的区块；
+// - 折叠状态不放状态层 → 切分类回来全被展开；
+// - GIF 状态做成全局单值 → 多包互相覆盖，第二个包的动图永远不显示。
 
 package ui.screens.archive
 
@@ -23,23 +26,21 @@ import ui.screens.download.ImageDownloader
 import ui.screens.settings.ServerAddressStore
 import ui.screens.state.GifState
 import ui.screens.state.HomeStateHolder
-import ui.screens.state.HomeView
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
-// 样本根路径：模拟服务端返回的分类绝对路径。
-// 必须是**绝对路径**形态（带前导斜杠）：真实服务端返回的就是 /volume6/... 这类绝对路径，
-// 换成相对形态会让"绝对路径"分支测不到（MediaSrc.normalize 的"补斜杠"分支会被当成主路径）。
-// 用 /root/xxx 这种明显的虚构绝对路径：既保持线上真实形态，又不含任何本机环境信息。
-private const val SAMPLE_ROOT_PATH = "/root/honkai"
 
 private const val NOW_MS = 1_704_067_200_000L
 
+// 样本分类名与根路径：fixture 与断言共用一份
+private const val SAMPLE_CATEGORY_NAME = "崩坏3"
+private const val SAMPLE_ROOT_PATH = "/root/honkai"
+
 private const val SITE_CONFIG_JSON = """
 {"title":"拾光集","fsRoot":"/root","imagesPerRow":20,
- "categories":[{"name":"崩坏3","label":"崩坏3","color":"#c084fc"}],
- "directories":[{"path":"$SAMPLE_ROOT_PATH","category":"崩坏3"}]}
+ "categories":[{"name":"$SAMPLE_CATEGORY_NAME","label":"$SAMPLE_CATEGORY_NAME","color":"#c084fc"}],
+ "directories":[{"path":"$SAMPLE_ROOT_PATH","category":"$SAMPLE_CATEGORY_NAME"}]}
 """
 
 private const val EMPTY_IMAGES_JSON = """
@@ -49,12 +50,13 @@ private const val EMPTY_IMAGES_JSON = """
 
 private const val STATUS_JSON = """{"ok":true,"version":"1.0.3"}"""
 
-// 两个包：一个 mod 包（hasIni+speed），一个普通图包；包内含中文/空格条目与一条穿越尝试
+// 三个包：mod 包（hasIni + speed，编排序列帧）、普通图包、空包（无图片条目）
 private const val ZIPS_JSON = """
 {"ok":true,"zips":[
   {"path":"$SAMPLE_ROOT_PATH/mod.zip","name":"mod.zip",
-   "images":["贴图 001.png","贴图 002.png","../escape.png"],"hasIni":true,"speed":1.5},
-  {"path":"$SAMPLE_ROOT_PATH/plain.zip","name":"plain.zip","images":["a.webp"],"hasIni":false}
+   "images":["贴图 001.png","贴图 002.png"],"hasIni":true,"speed":1.5},
+  {"path":"$SAMPLE_ROOT_PATH/plain.zip","name":"plain.zip","images":["a.webp"],"hasIni":false},
+  {"path":"$SAMPLE_ROOT_PATH/empty.zip","name":"empty.zip","images":[],"hasIni":false}
 ]}
 """
 
@@ -78,7 +80,7 @@ private object NoopDownloader : ImageDownloader {
 
 /**
  * 可编排的假传输层：
- * - /api/zip/scan 返回 [scanBody]/[scanCode]
+ * - /api/zip/scan 返回 [scanCode]/[scanBody]
  * - getBytes（GIF 失败诊断）返回 [bytesCode] + [bytesBody]
  */
 private class ArchiveTransport(
@@ -89,6 +91,7 @@ private class ArchiveTransport(
 ) : HttpTransport {
 
     var scanCount: Int = 0
+    var lastScanDir: String? = null
     var bytesCount: Int = 0
     var lastBytesUrl: String = ""
 
@@ -101,6 +104,7 @@ private class ArchiveTransport(
             url.endsWith("/api/uploaded") -> HttpRawResponse(200, "[]", "application/json")
             url.endsWith("/api/zip/scan") -> {
                 scanCount += 1
+                lastScanDir = query["dir"]
                 HttpRawResponse(scanCode, scanBody, "application/json")
             }
             else -> HttpRawResponse(404, "{}", "application/json")
@@ -117,67 +121,99 @@ private class ArchiveTransport(
     }
 }
 
-private fun holder(transport: HttpTransport, addressStore: ServerAddressStore = FixedAddressStore()): HomeStateHolder =
-    HomeStateHolder(
-        clientFactory = { address, onUnauthorized ->
-            ApiClient(address, transport, onUnauthorized = onUnauthorized)
-        },
-        addressStore = addressStore,
-        imageDownloader = NoopDownloader,
-        authTokenStore = LoggedOutTokens,
-        nowProvider = { NOW_MS },
-    )
+private fun holder(
+    transport: HttpTransport,
+    addressStore: ServerAddressStore = FixedAddressStore(),
+): HomeStateHolder = HomeStateHolder(
+    clientFactory = { address, onUnauthorized ->
+        ApiClient(address, transport, onUnauthorized = onUnauthorized)
+    },
+    addressStore = addressStore,
+    imageDownloader = NoopDownloader,
+    authTokenStore = LoggedOutTokens,
+    nowProvider = { NOW_MS },
+)
 
 class ArchiveFlowTest {
 
     @Test
-    fun scanSuccessPopulatesArchiveListWithIniFlagAndSpeed() = runBlocking {
-        val stateHolder = holder(ArchiveTransport())
+    fun enteringCategoryScansZipsOfThatDirectory() = runBlocking {
+        val transport = ArchiveTransport()
+        val stateHolder = holder(transport)
+
         stateHolder.bootstrap()
 
-        stateHolder.selectView(HomeView.Archive)
-
-        val archives = stateHolder.state.archives
-        assertEquals(2, archives.size)
-        assertEquals("mod.zip", archives[0].name)
-        assertTrue(archives[0].hasIni, "含 ini 的包要标记成 mod 包")
-        assertEquals(1.5, archives[0].speed)
-        assertFalse(archives[1].hasIni)
-        // 目录取自当前分类的绝对路径
-        assertEquals("$SAMPLE_ROOT_PATH", stateHolder.state.archiveDir)
+        // 目录取自当前分类的绝对路径（不是用户手输、也不是根目录）
+        assertEquals(SAMPLE_ROOT_PATH, stateHolder.state.archiveDir)
+        assertEquals(SAMPLE_ROOT_PATH, transport.lastScanDir)
+        assertEquals(3, stateHolder.state.archives.size, "扫描结果应原样保留（过滤在展示层做）")
     }
 
     @Test
     fun scanFailureShowsServerChineseMessage() = runBlocking {
         val transport = ArchiveTransport(scanCode = 400, scanBody = """{"ok":false,"error":"目录无效"}""")
         val stateHolder = holder(transport)
+
         stateHolder.bootstrap()
 
-        stateHolder.selectView(HomeView.Archive)
-
-        val hint = stateHolder.state.actionHint.orEmpty()
+        val hint = stateHolder.state.archiveScanError.orEmpty()
         assertTrue(hint.contains("扫描压缩包失败"), "要说清做了什么，实际：$hint")
         assertTrue(hint.contains("目录无效"), "要用服务端原文，实际：$hint")
         assertTrue(stateHolder.state.archives.isEmpty())
+        assertFalse(stateHolder.state.archivesLoading, "失败后不能一直停在加载态")
+        // 关键：扫包失败不能占用那一行全局提示（否则会盖掉"登录已过期"这类更重要的消息）
+        assertTrue(
+            stateHolder.state.actionHint.isNullOrBlank(),
+            "局部失败不该写全局提示，实际：${stateHolder.state.actionHint}",
+        )
     }
 
     @Test
-    fun openArchiveEncodesEntryNamesAndSkipsUnsafeOnes() = runBlocking {
+    fun emptyArchivesAreFilteredOutOfTheSection() = runBlocking {
         val stateHolder = holder(ArchiveTransport())
         stateHolder.bootstrap()
-        stateHolder.selectView(HomeView.Archive)
+
+        val visible = stateHolder.state.visibleArchives
+
+        assertEquals(2, visible.size, "没有图片条目的包不该出现在区块里")
+        assertTrue(visible.none { it.name == "empty.zip" })
+    }
+
+    @Test
+    fun toggleCollapsedFlipsPerPackageAndKeepsAcrossCategorySwitch() = runBlocking {
+        val stateHolder = holder(ArchiveTransport())
+        stateHolder.bootstrap()
         val modZip = stateHolder.state.archives.first { it.name == "mod.zip" }
+        val plainZip = stateHolder.state.archives.first { it.name == "plain.zip" }
+        assertFalse(stateHolder.state.isArchiveCollapsed(modZip), "默认展开")
 
-        stateHolder.openArchive(modZip)
+        stateHolder.toggleArchiveCollapsed(modZip.path)
+        assertTrue(stateHolder.state.isArchiveCollapsed(modZip))
+        assertFalse(stateHolder.state.isArchiveCollapsed(plainZip), "折叠是按包记的，不能连带别的包")
 
-        val images = stateHolder.state.archiveImages
-        // "../escape.png" 被过滤：服务端会 400，不必挂进网格
-        assertEquals(2, images.size, "含 .. 的条目应被客户端提前排除")
+        // 切一次分类再回来：折叠选择仍在（状态层持有，不是组件内临时变量）
+        stateHolder.selectCategory(SAMPLE_CATEGORY_NAME)
+        assertTrue(stateHolder.state.isArchiveCollapsed(modZip), "切分类后折叠状态应保留")
+
+        stateHolder.toggleArchiveCollapsed(modZip.path)
+        assertFalse(stateHolder.state.isArchiveCollapsed(modZip))
+    }
+
+    @Test
+    fun zipImagesOfEncodesEntryNamesAndSkipsUnsafeOnes() = runBlocking {
+        val stateHolder = holder(ArchiveTransport())
+        stateHolder.bootstrap()
+        val modZip = stateHolder.state.archives.first { it.name == "mod.zip" }
+        // 追加一条路径穿越尝试：服务端会 400，客户端应提前过滤
+        val withUnsafe = modZip.copy(images = modZip.images + "../escape.png")
+
+        val images = stateHolder.zipImagesOf(withUnsafe)
+
+        assertEquals(2, images.size, "含 .. 的条目应被提前排除")
         val url = images[0].absoluteUrl
         assertTrue(url.contains("/api/zip/img"), "应指向包内图片接口，实际：$url")
-        // 期望值由生产编码器算出来，而不是手写一段 %XX：手写的编码串一旦常量变了就静默失配
         assertTrue(
-            url.contains("path=" + UrlBuilder.percentEncode("$SAMPLE_ROOT_PATH/mod.zip")),
+            url.contains("path=" + UrlBuilder.percentEncode(withUnsafe.path)),
             "zip 路径要按绝对路径编码（前导斜杠也编码），实际：$url",
         )
         assertTrue(url.contains("%E8%B4%B4%E5%9B%BE"), "中文条目名要按 UTF-8 编码，实际：$url")
@@ -186,44 +222,34 @@ class ArchiveFlowTest {
     }
 
     @Test
-    fun gifRequestUsesZipEndpointWhenArchiveOpenedAndDedupesWhileGenerating() = runBlocking {
+    fun gifStateIsPerPackageAndRequestIsDeduped() = runBlocking {
         val stateHolder = holder(ArchiveTransport())
         stateHolder.bootstrap()
-        stateHolder.selectView(HomeView.Archive)
-        stateHolder.openArchive(stateHolder.state.archives.first { it.name == "mod.zip" })
+        val modZip = stateHolder.state.archives.first { it.name == "mod.zip" }
+        val plainZip = stateHolder.state.archives.first { it.name == "plain.zip" }
 
-        stateHolder.requestGif()
-        val first = stateHolder.state.gifState
-        assertTrue(first is GifState.Generating, "请求后应进入生成中")
-        val firstUrl = (first as GifState.Generating).url
-        assertTrue(firstUrl.contains("/api/zip/gif"), "包内视图该用包内接口，实际：$firstUrl")
-        assertTrue(firstUrl.contains("fps=60"), "要带 fps 参数（服务端用 ini 的 speed 换算），实际：$firstUrl")
+        stateHolder.requestZipGif(modZip.path)
+        val modState = stateHolder.state.gifStateOf(modZip)
+        assertTrue(modState is GifState.Generating)
+        val url = (modState as GifState.Generating).url
+        assertTrue(url.contains("/api/zip/gif"), "包内动图该走包内接口，实际：$url")
+        assertTrue(url.contains("fps=60"), "要带 fps（服务端用 ini 的 speed 换算），实际：$url")
 
-        // 防重复：生成中再次请求不应变（避免排多个服务端任务）
-        stateHolder.requestGif()
-        assertEquals(first.url, (stateHolder.state.gifState as GifState.Generating).url)
+        // 防重复：同一包生成中再请求不变
+        stateHolder.requestZipGif(modZip.path)
+        assertEquals(url, (stateHolder.state.gifStateOf(modZip) as GifState.Generating).url)
 
-        // 加载成功 → 就绪；此时再点应允许重新合成
-        stateHolder.onGifLoaded(firstUrl)
-        assertTrue(stateHolder.state.gifState is GifState.Ready)
-        stateHolder.requestGif()
-        assertTrue(stateHolder.state.gifState is GifState.Generating)
-    }
-
-    @Test
-    fun directoryGifUsesDirEndpointWhenNoArchiveOpened() = runBlocking {
-        val stateHolder = holder(ArchiveTransport())
-        stateHolder.bootstrap()
-        stateHolder.selectView(HomeView.Archive)
-
-        stateHolder.requestGif()
-
-        val url = (stateHolder.state.gifState as GifState.Generating).url
-        assertTrue(url.contains("/api/gif"), "目录视图该用目录接口，实际：$url")
+        // 另一个包独立：不会因为 A 在生成就挡掉 B
+        stateHolder.requestZipGif(plainZip.path)
+        assertTrue(stateHolder.state.gifStateOf(plainZip) is GifState.Generating)
         assertTrue(
-            url.contains("dir=" + UrlBuilder.percentEncode(SAMPLE_ROOT_PATH)),
-            "参数名必须是 dir，且绝对路径的斜杠要编码，实际：$url",
+            stateHolder.state.gifStateOf(modZip) is GifState.Generating,
+            "B 的请求不能覆盖 A 的状态（这就是状态做成 per-package 的原因）",
         )
+
+        // 加载成功 → 该包就绪
+        stateHolder.onZipGifLoaded(modZip.path, url)
+        assertTrue(stateHolder.state.gifStateOf(modZip) is GifState.Ready)
     }
 
     @Test
@@ -231,54 +257,62 @@ class ArchiveFlowTest {
         val transport = ArchiveTransport(bytesCode = 400, bytesBody = """{"ok":false,"error":"压缩包无效"}""")
         val stateHolder = holder(transport)
         stateHolder.bootstrap()
-        stateHolder.selectView(HomeView.Archive)
-        stateHolder.openArchive(stateHolder.state.archives.first())
+        val modZip = stateHolder.state.archives.first { it.name == "mod.zip" }
 
-        stateHolder.requestGif()
-        val url = (stateHolder.state.gifState as GifState.Generating).url
-        stateHolder.onGifLoadFailed(url)
+        stateHolder.requestZipGif(modZip.path)
+        val url = (stateHolder.state.gifStateOf(modZip) as GifState.Generating).url
+        stateHolder.onZipGifLoadFailed(modZip.path, url)
 
         assertEquals(1, transport.bytesCount, "失败时要走二进制通道问一次原因")
         assertEquals(url, transport.lastBytesUrl)
-        val state = stateHolder.state.gifState
-        assertTrue(state is GifState.Failed)
+        val failed = stateHolder.state.gifStateOf(modZip)
+        assertTrue(failed is GifState.Failed)
         assertTrue(
-            (state as GifState.Failed).message.contains("压缩包无效"),
-            "要用服务端那句中文，实际：${state.message}",
+            (failed as GifState.Failed).message.contains("压缩包无效"),
+            "要用服务端那句中文，实际：${failed.message}",
         )
+
+        // 重试：回到 Idle（界面随后会重新触发一次），不会自动无限重试
+        stateHolder.resetZipGif(modZip.path)
+        assertEquals(GifState.Idle, stateHolder.state.gifStateOf(modZip))
+    }
+
+    @Test
+    fun emptyDirectoryNeedsBothImagesAndArchivesEmpty() = runBlocking {
+        // 无图但有包：内容其实在区块里，不能显示"还没有图片"
+        val withZips = holder(ArchiveTransport())
+        withZips.bootstrap()
+        assertTrue(withZips.state.gridImages.isEmpty())
+        assertFalse(withZips.state.isContentEmpty, "有压缩包就不算空目录")
+
+        // 无图无包：真·空目录
+        val noZips = holder(ArchiveTransport(scanBody = """{"ok":true,"zips":[]}"""))
+        noZips.bootstrap()
+        assertTrue(noZips.state.isContentEmpty)
     }
 
     @Test
     fun changingServerClearsArchiveState() = runBlocking {
         val addressStore = FixedAddressStore()
-        val stateHolder = holder(ArchiveTransport(), addressStore)
+        val transport = ArchiveTransport()
+        val stateHolder = holder(transport, addressStore)
         stateHolder.bootstrap()
-        stateHolder.selectView(HomeView.Archive)
-        stateHolder.openArchive(stateHolder.state.archives.first())
-        stateHolder.requestGif()
+        val modZip = stateHolder.state.archives.first { it.name == "mod.zip" }
+        stateHolder.toggleArchiveCollapsed(modZip.path)
+        stateHolder.requestZipGif(modZip.path)
         assertTrue(stateHolder.state.archives.isNotEmpty())
 
         stateHolder.openSettings()
-        stateHolder.updateAddressDraft("http://other:9000")
+        stateHolder.updateAddressDraft("http://other.test")
         stateHolder.saveAddress()
 
-        assertEquals("", stateHolder.state.archiveDir, "换服务器后目录要清")
-        assertTrue(stateHolder.state.archives.isEmpty(), "换服务器后压缩包列表要清")
-        assertEquals(null, stateHolder.state.openedArchive, "换服务器后包内状态要清")
-        assertTrue(stateHolder.state.archiveImages.isEmpty())
-        assertEquals(GifState.Idle, stateHolder.state.gifState, "换服务器后已合成的 GIF 要清")
-        assertEquals(HomeView.All, stateHolder.state.view)
-    }
-
-    @Test
-    fun archiveViewWithoutCategoryGivesActionableHint() = runBlocking {
-        // 不进 bootstrap：此时没有任何分类，压缩包视图没有可扫描的目录
-        val stateHolder = holder(ArchiveTransport())
-
-        stateHolder.selectView(HomeView.Archive)
-
-        val hint = stateHolder.state.actionHint.orEmpty()
-        assertTrue(hint.contains("请先选择"), "没有目录时要给出可操作提示，实际：$hint")
+        // 折叠键与 GIF 状态是"旧服务器的路径/URL"，必须清
+        assertTrue(stateHolder.state.collapsedArchives.isEmpty(), "旧服务器的折叠键没意义，要清")
+        assertTrue(stateHolder.state.zipGifStates.isEmpty(), "旧服务器的 GIF 状态要清")
+        // 列表本身会被新地址重新扫一遍填回来（这是正确行为：新服务器同路径下也可能有包），
+        // 用扫描次数证明"确实重扫过"，而不是留着旧结果
+        assertTrue(transport.scanCount >= 2, "换地址后应重新扫描，实际次数：${transport.scanCount}")
+        assertEquals(SAMPLE_ROOT_PATH, stateHolder.state.archiveDir)
     }
 }
 

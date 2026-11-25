@@ -10,6 +10,8 @@
 package ui.screens.state
 
 import androidx.compose.runtime.mutableStateOf
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import com.eightfs.lumigather.data.ApiClient
 import com.eightfs.lumigather.data.ApiError
 import com.eightfs.lumigather.data.ArchiveEntry
@@ -75,7 +77,7 @@ data class AuthUiState(
  * 用一个枚举而不是三个布尔：互斥这件事由类型本身保证 —— 「收藏被选中时分类必须不选中」
  * 不需要任何清理代码，页面判断 selected 时写 `view == All && ...` 就永远不会两处同时亮。
  */
-enum class HomeView { All, Favorites, Guest, Archive }
+enum class HomeView { All, Favorites, Guest }
 
 /**
  * 整屏的完整状态。任何时刻界面都是它的一个纯函数。
@@ -141,14 +143,19 @@ data class HomeUiState(
     val guestLoading: Boolean = false,
     // 正在添加/移除的那条 src（非空 = 操作中 → 按钮禁用，防连点）
     val favoriteActionSrc: String = "",
-    // ---- 压缩包 / 序列帧（全部由服务端处理，客户端只拼 URL）----
+    // ---- 压缩包 / 序列帧：属于"当前目录内容"，不是独立视图 ----
+    // 扫描的是哪个目录（= 当前分类的 rootPath）；换目录/换服务器都要清
     val archiveDir: String = "",
     val archives: List<ArchiveEntry> = emptyList(),
     val archivesLoading: Boolean = false,
-    // 已打开的压缩包（null = 停在压缩包列表）
-    val openedArchive: ArchiveEntry? = null,
-    val archiveImages: List<ImageItem> = emptyList(),
-    val gifState: GifState = GifState.Idle,
+    // 扫描失败的原因（独立字段，不占用那一行全局提示）：扫包是次要功能，
+    // 它失败绝不能盖掉"登录已过期""下载失败"这类更重要、且与用户当前动作直接相关的提示
+    val archiveScanError: String? = null,
+    // 已收起的包（按 path 记）。放在状态里而不是组件内：切分类再切回来要保留用户的折叠选择
+    val collapsedArchives: Set<String> = emptySet(),
+    // 每个包自己的 GIF 状态（key = 包 path）。包级而不是全局单值：
+    // 一个目录下可能同时有多个序列帧包，各自独立生成、独立失败
+    val zipGifStates: Map<String, GifState> = emptyMap(),
 ) {
     // 左侧栏的可见分类：搜索框有内容时按展示名过滤，空查询不过滤。
     val visibleCategories: List<CategoryView>
@@ -179,9 +186,6 @@ data class HomeUiState(
 
             HomeView.Favorites -> "收藏 · ${favoriteImages.size}"
             HomeView.Guest -> "游客 · ${guestImages.size}"
-            HomeView.Archive -> openedArchive
-                ?.let { archive -> "${archive.name} · ${archiveImages.size}" }
-                ?: "压缩包 · ${archives.size}"
         }
 
     // ---- 三视图的唯一出口：页面只读这几个派生值，不再自己判断 view ----
@@ -192,7 +196,6 @@ data class HomeUiState(
             HomeView.All -> images
             HomeView.Favorites -> favoriteImages
             HomeView.Guest -> guestImages
-            HomeView.Archive -> archiveImages
         }
 
     val gridLoading: Boolean
@@ -200,8 +203,6 @@ data class HomeUiState(
             HomeView.All -> isLoadingPage
             HomeView.Favorites -> favoritesLoading
             HomeView.Guest -> guestLoading
-            // 包内图片是一次性拼好的（不需要网络），没有加载态
-            HomeView.Archive -> false
         }
 
     // 空态文案：三套数据"为什么没有"的原因不同，用同一句会让人以为收藏坏了
@@ -210,7 +211,6 @@ data class HomeUiState(
             HomeView.All -> "这个分类还没有图片"
             HomeView.Favorites -> "还没有收藏的图片"
             HomeView.Guest -> "还没有游客上传的图片"
-            HomeView.Archive -> "这个压缩包里没有图片"
         }
 
     val gridEmptyHint: String
@@ -218,7 +218,6 @@ data class HomeUiState(
             HomeView.All -> "试试左上角换一个分类"
             HomeView.Favorites -> "在图片详情里点「收藏」，就会出现在这里"
             HomeView.Guest -> "游客上传区目前是空的"
-            HomeView.Archive -> "试试包内其它格式，或返回压缩包列表"
         }
 
     // 当前详情图是否已收藏：按规范化 src 比对（原始写法可能是完整 URL，直接比会永远不相等）
@@ -228,20 +227,36 @@ data class HomeUiState(
             return MediaSrc.normalize(image.relativeUrl) in favoriteSrcs
         }
 
+    // ---- 压缩包区块（当前目录内容的第二部分，挂在图片网格之后）----
+
     /**
-     * 是否值得显示「合成动图」入口。
-     *
-     * 包内视图看这个包的条目名，目录视图看当前已加载的图片名 —— 判据只是"像不像序列帧"，
-     * 真正能不能合成由服务端决定（判错最多多/少一个按钮，不会给出错误结果）。
+     * 要渲染的包：只保留有图的（服务端可能给出只有 ini / 只有非图片条目的包，
+     * 那种包点开是空的，占着位置只会让人以为界面坏了）。
      */
-    val canComposeGif: Boolean
-        get() = when (view) {
-            HomeView.Archive -> openedArchive
-                ?.let { ArchiveHeuristics.looksLikeSequence(it.images) }
-                ?: false
-            HomeView.All -> ArchiveHeuristics.looksLikeSequence(images.map { it.name })
-            HomeView.Favorites, HomeView.Guest -> false
-        }
+    val visibleArchives: List<ArchiveEntry>
+        get() = archives.filter { it.images.isNotEmpty() }
+
+    /**
+     * 真·空目录判定：图片与压缩包都空才算空。
+     *
+     * 分类下有包但没图（Pixiv 图包常见）时不能显示"这个分类还没有图片" —— 内容其实就在下面。
+     */
+    val isContentEmpty: Boolean
+        get() = gridImages.isEmpty() && visibleArchives.isEmpty()
+
+    /**
+     * 这个包是否值得合成动图（决定包内显示"GIF 卡"还是"平铺图片"）。
+     *
+     * 判据只是"条目名像不像序列帧"，真正能不能合成由服务端决定；
+     * 判错最多是显示了一张会失败的卡，不会给出错误结果。
+     */
+    fun canSynthGif(entry: ArchiveEntry): Boolean =
+        ArchiveHeuristics.looksLikeSequence(entry.images)
+
+    // 某个包的折叠态与 GIF 状态（按包 path 索引，互不影响）
+    fun isArchiveCollapsed(entry: ArchiveEntry): Boolean = entry.path in collapsedArchives
+
+    fun gifStateOf(entry: ArchiveEntry): GifState = zipGifStates[entry.path] ?: GifState.Idle
 
     // 当前这张图是否正在增删（按钮禁用 + 文案改"处理中"）
     val isFavoriteMutating: Boolean
@@ -432,8 +447,18 @@ class HomeStateHolder(
     }
 
     // 切换分类：具体流程（分页重置、首屏重拉）在浏览子状态机里；收侧栏由它回调本类编排
+    /**
+     * 切到某个分类：图片列表与压缩包扫描**并行**发起。
+     *
+     * 为什么并行：扫包要走服务端 spawn 7zz 列目录，明显比图片列表慢；两者互不依赖，
+     * 串行会让网格白等。谁先回来谁先渲染。
+     */
     suspend fun selectCategory(categoryName: String) {
-        browse.selectCategory(categoryName)
+        val rootPath = state.categories.firstOrNull { it.name == categoryName }?.rootPath.orEmpty()
+        coroutineScope {
+            launch { browse.selectCategory(categoryName) }
+            launch { archive.loadArchives(rootPath) }
+        }
     }
 
     // 分页加载：到底判据与游标推进都在浏览子状态机里
@@ -503,31 +528,34 @@ class HomeStateHolder(
 
     // ---- 压缩包 / 序列帧：全部转发给压缩包子状态机 ----
 
-    fun openArchive(entry: ArchiveEntry) {
-        archive.openArchive(entry)
+    /** 折叠/展开某个包（收起状态留在状态里，切分类回来还保留）。 */
+    fun toggleArchiveCollapsed(zipPath: String) {
+        archive.toggleCollapsed(zipPath)
     }
 
-    fun closeArchive() {
-        archive.closeArchive()
-    }
-
-    /** 请求合成 GIF（目录或包内，取决于当前视图）。生成中会直接忽略，防连点。 */
-    fun requestGif() {
-        archive.requestGif()
+    /**
+     * 请求合成某个包的 GIF。生成中重复调用会被忽略（防连点、防自动触发重复发请求）。
+     */
+    fun requestZipGif(zipPath: String) {
+        archive.requestGif(zipPath)
     }
 
     // 图片加载成功/失败回调：GIF 是"按 URL 加载"的，只有图片层知道完成没完成
-    fun onGifLoaded(url: String) {
-        archive.onGifLoaded(url)
+    fun onZipGifLoaded(zipPath: String, url: String) {
+        archive.onGifLoaded(zipPath, url)
     }
 
-    suspend fun onGifLoadFailed(url: String) {
-        archive.onGifLoadFailed(url)
+    suspend fun onZipGifLoadFailed(zipPath: String, url: String) {
+        archive.onGifLoadFailed(zipPath, url)
     }
 
-    fun dismissGif() {
-        archive.dismissGif()
+    /** 丢弃某个包的 GIF（失败重试 / 换包时复位）。 */
+    fun resetZipGif(zipPath: String) {
+        archive.resetGif(zipPath)
     }
+
+    /** 把某个包内的条目名拼成可加载的图片模型（UI 直接用，不自己拼 URL）。 */
+    fun zipImagesOf(entry: ArchiveEntry): List<ImageItem> = archive.zipImagesOf(entry)
 
     /**
      * 切换网格展示哪一套数据（分类 / 收藏 / 游客）。
@@ -550,8 +578,6 @@ class HomeStateHolder(
             HomeView.All -> if (state.categories.isEmpty()) browse.refreshContent()
             HomeView.Favorites -> favorite.loadFavorites()
             HomeView.Guest -> favorite.loadGuestUploads()
-            // 压缩包按"当前分类的绝对路径"扫描；没选分类时会给出可操作提示
-            HomeView.Archive -> archive.loadArchives(state.selectedCategoryView?.rootPath.orEmpty())
         }
     }
 
@@ -612,6 +638,9 @@ class HomeStateHolder(
     // 地址落定之后的主链路：分类 → 第一页 → 后台补张数（全部在浏览子状态机里）
     private suspend fun refreshContent() {
         browse.refreshContent()
+        // 初次加载要等浏览子状态机选出第一个分类才知道目录，所以这里是"分类落定后立刻扫"；
+        // 用户切分类时走 selectCategory()，那条路径是真并行。
+        archive.loadArchives(state.selectedCategoryView?.rootPath.orEmpty())
     }
 
     // 换服务器后要把"所有来自服务器的数据"重新拉一遍：分类图之外还有收藏与游客上传

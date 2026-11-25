@@ -41,10 +41,7 @@ import ui.components.AppError
 import ui.components.AppIconButton
 import ui.components.AppLoading
 import ui.screens.HomeLayout
-import ui.screens.archive.ArchiveGifArea
-import ui.screens.archive.ArchiveHeader
-import ui.screens.archive.ArchiveIniNotice
-import ui.screens.archive.ArchiveListPane
+import ui.screens.archive.ZipSection
 import ui.screens.state.HomeUiState
 import ui.screens.state.HomeView
 
@@ -57,13 +54,14 @@ fun HomeScreen(
     onLoadMore: () -> Unit,
     onRetry: () -> Unit,
     onOpenSettings: () -> Unit,
-    // 压缩包动作（全部转给状态层，页面不做任何数据处理）
-    onOpenArchive: (ArchiveEntry) -> Unit,
-    onCloseArchive: () -> Unit,
-    onComposeGif: () -> Unit,
-    onGifLoaded: (String) -> Unit,
-    onGifLoadFailed: (String) -> Unit,
-    onDismissGif: () -> Unit,
+    // 压缩包区块动作（全部转给状态层，页面不做任何数据处理）
+    onToggleArchive: (String) -> Unit,
+    onComposeZipGif: (String) -> Unit,
+    onZipGifLoaded: (String, String) -> Unit,
+    onZipGifLoadFailed: (String, String) -> Unit,
+    onRetryZipGif: (String) -> Unit,
+    // 把包内条目名拼成可渲染图片模型（由状态层拼 URL，UI 不自己拼）
+    buildZipImages: (ArchiveEntry) -> List<ImageItem>,
     modifier: Modifier = Modifier,
     // 侧栏拖动由 AppRoot 构造后传进来，挂到网格区（避免抢顶部 chip 条的横向滚动）
     gridGestureModifier: Modifier = Modifier,
@@ -90,12 +88,12 @@ fun HomeScreen(
                 onOpenImage = onOpenImage,
                 onLoadMore = onLoadMore,
                 onRetry = onRetry,
-                onOpenArchive = onOpenArchive,
-                onCloseArchive = onCloseArchive,
-                onComposeGif = onComposeGif,
-                onGifLoaded = onGifLoaded,
-                onGifLoadFailed = onGifLoadFailed,
-                onDismissGif = onDismissGif,
+                onToggleArchive = onToggleArchive,
+                onComposeZipGif = onComposeZipGif,
+                onZipGifLoaded = onZipGifLoaded,
+                onZipGifLoadFailed = onZipGifLoadFailed,
+                onRetryZipGif = onRetryZipGif,
+                buildZipImages = buildZipImages,
             )
         }
 
@@ -219,30 +217,13 @@ private fun HomeContent(
     onOpenImage: (ImageItem) -> Unit,
     onLoadMore: () -> Unit,
     onRetry: () -> Unit,
-    onOpenArchive: (ArchiveEntry) -> Unit,
-    onCloseArchive: () -> Unit,
-    onComposeGif: () -> Unit,
-    onGifLoaded: (String) -> Unit,
-    onGifLoadFailed: (String) -> Unit,
-    onDismissGif: () -> Unit,
+    onToggleArchive: (String) -> Unit,
+    onComposeZipGif: (String) -> Unit,
+    onZipGifLoaded: (String, String) -> Unit,
+    onZipGifLoadFailed: (String, String) -> Unit,
+    onRetryZipGif: (String) -> Unit,
+    buildZipImages: (ArchiveEntry) -> List<ImageItem>,
 ) {
-    // 压缩包视图是"网格之外的一条额外布局"（标题条 + mod 提示 + GIF 区 + 列表/网格），
-    // 所以先分流，避免把它硬塞进下面那串 when 里
-    if (state.view == HomeView.Archive) {
-        ArchiveContent(
-            state = state,
-            onOpenImage = onOpenImage,
-            onLoadMore = onLoadMore,
-            onOpenArchive = onOpenArchive,
-            onCloseArchive = onCloseArchive,
-            onComposeGif = onComposeGif,
-            onGifLoaded = onGifLoaded,
-            onGifLoadFailed = onGifLoadFailed,
-            onDismissGif = onDismissGif,
-        )
-        return
-    }
-
     val categoryError = state.categoryError
     val pageError = state.pageError
 
@@ -269,57 +250,24 @@ private fun HomeContent(
         // 三视图共用一个加载态出口：画面一致，数据来源不同
         state.gridLoading -> AppLoading(modifier = Modifier.fillMaxSize())
 
-        state.gridImages.isEmpty() -> AppEmpty(
+        // 只有"图片与压缩包都空"才算空目录：分类下常有只有包没有图的情况，内容其实在下面
+        state.isContentEmpty -> AppEmpty(
             modifier = Modifier.fillMaxSize(),
             title = state.gridEmptyTitle,
             hint = state.gridEmptyHint,
         )
 
-        else -> ImageGrid(state = state, onOpenImage = onOpenImage, onLoadMore = onLoadMore)
-    }
-}
-
-/**
- * 压缩包视图：标题条 + mod 提示 + GIF 区 + （包内图片网格 / 压缩包列表）。
- *
- * 包内图片复用现有 [ImageGrid]，所以点开能进详情右栏、能下载 —— 与普通图片完全同一条链路。
- */
-@Composable
-private fun ArchiveContent(
-    state: HomeUiState,
-    onOpenImage: (ImageItem) -> Unit,
-    onLoadMore: () -> Unit,
-    onOpenArchive: (ArchiveEntry) -> Unit,
-    onCloseArchive: () -> Unit,
-    onComposeGif: () -> Unit,
-    onGifLoaded: (String) -> Unit,
-    onGifLoadFailed: (String) -> Unit,
-    onDismissGif: () -> Unit,
-) {
-    Column(modifier = Modifier.fillMaxSize()) {
-        ArchiveHeader(
+        else -> ImageGrid(
             state = state,
-            onComposeGif = onComposeGif,
-            onCloseArchive = onCloseArchive,
+            onOpenImage = onOpenImage,
+            onLoadMore = onLoadMore,
+            onToggleArchive = onToggleArchive,
+            onComposeZipGif = onComposeZipGif,
+            onZipGifLoaded = onZipGifLoaded,
+            onZipGifLoadFailed = onZipGifLoadFailed,
+            onRetryZipGif = onRetryZipGif,
+            buildZipImages = buildZipImages,
         )
-        state.openedArchive?.let { opened -> ArchiveIniNotice(opened) }
-        ArchiveGifArea(
-            state = state,
-            onGifLoaded = onGifLoaded,
-            onGifLoadFailed = onGifLoadFailed,
-            onDismissGif = onDismissGif,
-        )
-        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            when {
-                state.openedArchive == null -> ArchiveListPane(state = state, onOpenArchive = onOpenArchive)
-                state.gridImages.isEmpty() -> AppEmpty(
-                    modifier = Modifier.fillMaxSize(),
-                    title = state.gridEmptyTitle,
-                    hint = state.gridEmptyHint,
-                )
-                else -> ImageGrid(state = state, onOpenImage = onOpenImage, onLoadMore = onLoadMore)
-            }
-        }
     }
 }
 
@@ -328,6 +276,12 @@ private fun ImageGrid(
     state: HomeUiState,
     onOpenImage: (ImageItem) -> Unit,
     onLoadMore: () -> Unit,
+    onToggleArchive: (String) -> Unit,
+    onComposeZipGif: (String) -> Unit,
+    onZipGifLoaded: (String, String) -> Unit,
+    onZipGifLoadFailed: (String, String) -> Unit,
+    onRetryZipGif: (String) -> Unit,
+    buildZipImages: (ArchiveEntry) -> List<ImageItem>,
 ) {
     val metrics = AppTheme.metrics
 
@@ -349,14 +303,30 @@ private fun ImageGrid(
             )
         }
 
-        // 尾部：占满整行（span = maxLineSpan），既是"正在加载更多"的提示，也是触底加载的哨兵
-        // 只有分类视图有分页：收藏/游客的列表是一次性取回的完整数组
+        // 尾部一：分页哨兵（占满整行），只有分类视图有分页
         if (state.view == HomeView.All && (state.hasMore || state.isLoadingMore)) {
             item(span = { GridItemSpan(maxLineSpan) }) {
                 LoadMoreFooter(
                     isLoadingMore = state.isLoadingMore,
                     loadedCount = state.loadedCount,
                     onLoadMore = onLoadMore,
+                )
+            }
+        }
+
+        // 尾部二：当前目录的压缩包区块（占满整行）。放在分页哨兵之后 —— 网页版也是
+        // "图片网格渲染完，再在 gallery 末尾追加 .zip-wrap"，位置与滚动顺序都要一致。
+        if (state.visibleArchives.isNotEmpty()) {
+            item(span = { GridItemSpan(maxLineSpan) }) {
+                ZipSection(
+                    state = state,
+                    buildZipImages = buildZipImages,
+                    onToggleArchive = onToggleArchive,
+                    onComposeZipGif = onComposeZipGif,
+                    onGifLoaded = onZipGifLoaded,
+                    onGifLoadFailed = onZipGifLoadFailed,
+                    onRetryZipGif = onRetryZipGif,
+                    onOpenImage = onOpenImage,
                 )
             }
         }
