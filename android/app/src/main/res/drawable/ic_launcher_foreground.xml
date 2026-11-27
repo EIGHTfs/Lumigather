@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 前景：三张错位照片 + 太阳。
+     108dp 画布，内容收在中间 66dp 安全区内（自适应图标的安全区规范），
+     否则会被各厂商的形状遮罩裁掉边角。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- 第三张（最远）：倾斜、半透明 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:fillAlpha="0.26"
+        android:pathData="M27.5,35.2 L65.2,30.6 Q67.4,30.4 67.7,32.6 L73.1,71.4 Q73.3,73.6 71.1,73.9 L33.4,78.5 Q31.2,78.7 30.9,76.5 L25.5,37.7 Q25.3,35.5 27.5,35.2 Z" />
+
+    <!-- 第二张（中间） -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:fillAlpha="0.46"
+        android:pathData="M35.8,35.4 L73.6,35.4 Q75.9,35.4 75.9,37.7 L75.9,76.5 Q75.9,78.8 73.6,78.8 L35.8,78.8 Q33.5,78.8 33.5,76.5 L33.5,37.7 Q33.5,35.4 35.8,35.4 Z" />
+
+    <!-- 第一张（最近，实心）：照片本体 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M42.6,38.6 L80.4,38.6 Q82.7,38.6 82.7,40.9 L82.7,76.4 Q82.7,78.7 80.4,78.7 L42.6,78.7 Q40.3,78.7 40.3,76.4 L40.3,40.9 Q40.3,38.6 42.6,38.6 Z" />
+
+    <!-- 照片内容：山峦（裁在照片框内，避免小尺寸下发脏） -->
+    <path
+        android:fillColor="#4B67B4"
+        android:fillAlpha="0.9"
+        android:pathData="M40.3,66.5 L50.2,55.6 L58,63.6 L66.4,56 L82.7,70.2 L82.7,76.4 Q82.7,78.7 80.4,78.7 L42.6,78.7 Q40.3,78.7 40.3,76.4 Z" />
+
+    <!-- 太阳：拾「光」 -->
+    <path
+        android:fillColor="#FFC857"
+        android:pathData="M72.4,46.3 m-5.2,0 a5.2,5.2 0 1,0 10.4,0 a5.2,5.2 0 1,0 -10.4,0" />
+</vector>
