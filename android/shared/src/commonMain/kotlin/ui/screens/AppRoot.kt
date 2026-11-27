@@ -112,6 +112,11 @@ fun AppRoot(
             onLogin = stateHolder::openLoginSheet,
             onLogout = { scope.launch { stateHolder.logout() } },
             onClose = stateHolder::closeSettings,
+            // 更新用 AppRoot 这个 composable 的作用域（不是设置页内部的）：设置页只是它的一个分支，
+            // 关掉设置页不该把正在下载的任务一起取消
+            onCheckUpdate = { scope.launch { stateHolder.checkUpdate() } },
+            onDownloadUpdate = { scope.launch { stateHolder.downloadAndInstallUpdate() } },
+            onCancelUpdate = stateHolder::cancelUpdate,
             modifier = modifier,
         )
     } else {

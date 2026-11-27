@@ -41,6 +41,7 @@ import ui.components.PillVariant
 import ui.screens.HomeLayout
 import ui.screens.state.ConnectionTestState
 import ui.screens.state.HomeUiState
+import ui.screens.state.UpdateUiState
 
 @Composable
 fun ServerSettingsScreen(
@@ -51,6 +52,10 @@ fun ServerSettingsScreen(
     onLogin: () -> Unit,
     onLogout: () -> Unit,
     onClose: () -> Unit,
+    // 应用更新（走 GitHub Releases，不依赖登录态与服务器地址）
+    onCheckUpdate: () -> Unit,
+    onDownloadUpdate: () -> Unit,
+    onCancelUpdate: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = AppTheme.colors
@@ -101,6 +106,17 @@ fun ServerSettingsScreen(
         }
 
         item { SettingsHint() }
+
+        // 更新区放在最后：它是最不紧急的一块，但"连服务器"这个问题解决不了时，
+        // 用户很可能就是需要换一个更新的版本再来试
+        item {
+            UpdateCard(
+                state = state,
+                onCheckUpdate = onCheckUpdate,
+                onDownloadUpdate = onDownloadUpdate,
+                onCancelUpdate = onCancelUpdate,
+            )
+        }
     }
 }
 
@@ -287,3 +303,178 @@ private fun AccountCard(
         }
     }
 }
+
+/**
+ * 应用更新区。
+ *
+ * 位置与依赖都很克制：它不读服务器地址、不读登录态，因为「连接服务器」页在**还没连上**时就要显示，
+ * 而更新包来自 GitHub —— 连不连得上自家服务端与能不能升级是两件事。
+ *
+ * 失败一律内联显示在本卡片里（不写全局那一行提示槽）：检查更新是次要动作，
+ * 它失败绝不能盖掉「登录已过期」「保存失败」这类与用户当前操作直接相关的提示。
+ */
+@Composable
+private fun UpdateCard(
+    state: HomeUiState,
+    onCheckUpdate: () -> Unit,
+    onDownloadUpdate: () -> Unit,
+    onCancelUpdate: () -> Unit,
+) {
+    val colors = AppTheme.colors
+    val metrics = AppTheme.metrics
+    val currentVersion = state.localVersionName.ifEmpty { "未知" }
+
+    AppCard {
+        Text(text = "应用更新", color = colors.textFaint, fontSize = metrics.fontCaption)
+        Spacer(Modifier.fillMaxWidth().height(metrics.spacingXs))
+        Text(
+            text = "当前版本 $currentVersion",
+            color = colors.textSecondary,
+            fontSize = metrics.fontMicro,
+        )
+        Spacer(Modifier.fillMaxWidth().height(metrics.spacingSm))
+        UpdateStatusBlock(
+            update = state.update,
+            currentVersion = currentVersion,
+            onCheckUpdate = onCheckUpdate,
+            onDownloadUpdate = onDownloadUpdate,
+            onCancelUpdate = onCancelUpdate,
+        )
+    }
+}
+
+// 状态分发：每种状态一块小组件，避免一个函数里塞八种分支
+@Composable
+private fun UpdateStatusBlock(
+    update: UpdateUiState,
+    currentVersion: String,
+    onCheckUpdate: () -> Unit,
+    onDownloadUpdate: () -> Unit,
+    onCancelUpdate: () -> Unit,
+) {
+    when (update) {
+        UpdateUiState.Idle -> AppPillButton(
+            text = "检查更新",
+            onClick = onCheckUpdate,
+            variant = PillVariant.Secondary,
+        )
+
+        UpdateUiState.Checking -> AppPillButton(
+            text = "检查中…",
+            onClick = onCheckUpdate,
+            variant = PillVariant.Secondary,
+            enabled = false,
+        )
+
+        is UpdateUiState.Available -> UpdateAvailableBlock(update, onDownloadUpdate)
+        is UpdateUiState.Downloading -> UpdateDownloadingBlock(update, onCancelUpdate)
+        UpdateUiState.Latest -> UpdateStatusText("已是最新版本 $currentVersion")
+        UpdateUiState.InstallStarted -> UpdateStatusText("已调起系统安装界面，请在系统提示里确认安装")
+        is UpdateUiState.NeedPermission -> UpdatePermissionBlock(update.appLabel, onDownloadUpdate)
+        is UpdateUiState.Failed -> UpdateFailedBlock(update.message, onCheckUpdate)
+    }
+}
+
+// 有新版本：版本号 + 体积 + 更新说明 + 下载按钮
+@Composable
+private fun UpdateAvailableBlock(update: UpdateUiState.Available, onDownloadUpdate: () -> Unit) {
+    val colors = AppTheme.colors
+    val metrics = AppTheme.metrics
+    val release = update.release
+
+    Text(
+        text = "新版本 ${release.versionName}",
+        color = colors.textPrimary,
+        fontSize = metrics.fontSubtitle,
+    )
+    if (release.sizeBytes > 0) {
+        Text(
+            text = "体积 ${formatBytes(release.sizeBytes)}",
+            color = colors.textFaint,
+            fontSize = metrics.fontMicro,
+        )
+    }
+    if (release.releaseNotes.isNotEmpty()) {
+        Spacer(Modifier.fillMaxWidth().height(metrics.spacingXs))
+        Text(
+            text = release.releaseNotes,
+            color = colors.textSecondary,
+            fontSize = metrics.fontMicro,
+        )
+    }
+    Spacer(Modifier.fillMaxWidth().height(metrics.spacingSm))
+    AppPillButton(text = "下载并安装", onClick = onDownloadUpdate)
+}
+
+// 下载中：进度文案 + 取消（取消回到可再次下载，不报错）
+@Composable
+private fun UpdateDownloadingBlock(
+    update: UpdateUiState.Downloading,
+    onCancelUpdate: () -> Unit,
+) {
+    val colors = AppTheme.colors
+    val metrics = AppTheme.metrics
+
+    Text(
+        text = "正在下载 ${formatProgress(update.downloadedBytes, update.totalBytes)}",
+        color = colors.textPrimary,
+        fontSize = metrics.fontCaption,
+    )
+    Spacer(Modifier.fillMaxWidth().height(metrics.spacingSm))
+    AppPillButton(text = "取消", onClick = onCancelUpdate, variant = PillVariant.Ghost)
+}
+
+// 需授权：把"接下来做什么"写清楚，用户才知道去系统设置里开哪一项
+@Composable
+private fun UpdatePermissionBlock(appLabel: String, onDownloadUpdate: () -> Unit) {
+    val colors = AppTheme.colors
+    val metrics = AppTheme.metrics
+
+    Text(
+        text = "请先允许「$appLabel」安装未知应用，然后回到这里重新点一次「下载并安装」",
+        color = colors.textPrimary,
+        fontSize = metrics.fontCaption,
+    )
+    Spacer(Modifier.fillMaxWidth().height(metrics.spacingSm))
+    AppPillButton(text = "重新下载并安装", onClick = onDownloadUpdate)
+}
+
+// 失败：内联原因 + 重试（不弹 toast、不占用全局提示槽）
+@Composable
+private fun UpdateFailedBlock(message: String, onCheckUpdate: () -> Unit) {
+    val colors = AppTheme.colors
+    val metrics = AppTheme.metrics
+
+    Text(text = message, color = colors.textPrimary, fontSize = metrics.fontCaption)
+    Spacer(Modifier.fillMaxWidth().height(metrics.spacingSm))
+    AppPillButton(text = "重试", onClick = onCheckUpdate, variant = PillVariant.Secondary)
+}
+
+// 纯文本状态（已最新 / 已调起安装）共用一行
+@Composable
+private fun UpdateStatusText(text: String) {
+    val colors = AppTheme.colors
+    val metrics = AppTheme.metrics
+
+    Text(text = text, color = colors.textSecondary, fontSize = metrics.fontCaption)
+}
+
+// 下载进度文案：总大小未知时只报已下载，不显示百分比（避免出现 3% 才发现总量是猜的）
+private fun formatProgress(downloadedBytes: Long, totalBytes: Long): String {
+    if (totalBytes <= 0L) return formatBytes(downloadedBytes)
+    val percent = (downloadedBytes * PERCENT_SCALE / totalBytes).toInt()
+    return "$percent%（${formatBytes(downloadedBytes)} / ${formatBytes(totalBytes)}）"
+}
+
+// 字节数转可读文本：更新包是 MB 级，KB/MB 两档足够
+private fun formatBytes(bytes: Long): String {
+    if (bytes < 0L) return "未知大小"
+    val kilobytes = bytes / BYTES_PER_KB
+    if (kilobytes < BYTES_PER_KB) return "${bytes / BYTES_PER_KB} KB"
+    val tenthsOfMegabyte = bytes * TEN / (BYTES_PER_KB * BYTES_PER_KB)
+    return "${tenthsOfMegabyte / TEN}.${tenthsOfMegabyte % TEN} MB"
+}
+
+private const val PERCENT_SCALE = 100L
+private const val BYTES_PER_KB = 1024L
+private const val TEN = 10L

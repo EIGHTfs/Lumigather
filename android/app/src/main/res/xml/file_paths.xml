@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- FileProvider 可对外暴露的路径清单。
+     只开放 cacheDir/updates/：更新包下载到这里（免存储权限），其余路径一概不给 ——
+     暴露面越小越安全，尤其 app 里还缓存了图片与配置。 -->
+<paths>
+    <cache-path name="update_apks" path="updates/" />
+</paths>

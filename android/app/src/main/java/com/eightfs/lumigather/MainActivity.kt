@@ -17,6 +17,7 @@ import androidx.appcompat.app.AppCompatActivity
 import com.tencent.kuikly.core.render.android.adapter.KuiklyRenderAdapterManager
 import com.tencent.kuikly.core.render.android.expand.KuiklyRenderViewBaseDelegator
 import com.tencent.kuikly.core.render.android.expand.KuiklyRenderViewBaseDelegatorDelegate
+import com.eightfs.lumigather.data.AppInstallerRegistry
 import ui.screens.HOME_PAGE_NAME
 import ui.screens.download.AndroidPermissionBridge
 import ui.screens.settings.AndroidHostContext
@@ -32,6 +33,8 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         // 1) 上下文：页面侧的 SharedPreferences 存储靠它拿到 Context
         AndroidHostContext.install(this)
+        // 1.5) 安装器：APK 更新最后一步要 FileProvider（androidx 在 app 模块），故由这里注入给 shared
+        AppInstallerRegistry.install(AndroidApkInstaller(this))
         // 2) 图片适配器：漏了这步图片全白，是最容易误判成"网络不通"的静默失败
         registerImageAdapter()
 

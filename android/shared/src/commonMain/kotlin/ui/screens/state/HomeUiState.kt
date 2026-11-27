@@ -16,12 +16,16 @@ import com.eightfs.lumigather.data.ApiClient
 import com.eightfs.lumigather.data.ApiError
 import com.eightfs.lumigather.data.ArchiveEntry
 import com.eightfs.lumigather.data.ArchiveHeuristics
+import com.eightfs.lumigather.data.AppUpdateClient
+import com.eightfs.lumigather.data.AppUpdatePlatform
 import com.eightfs.lumigather.data.AuthTokenStore
 import com.eightfs.lumigather.data.CategoryView
 import com.eightfs.lumigather.data.ImageItem
 import com.eightfs.lumigather.data.LumigatherRepository
 import com.eightfs.lumigather.data.MediaSrc
+import com.eightfs.lumigather.data.createAppUpdatePlatform
 import com.eightfs.lumigather.data.currentEpochMillis
+import ui.screens.createDefaultHttpTransport
 import ui.screens.download.ImageDownloader
 import ui.screens.settings.ServerAddressStore
 
@@ -165,6 +169,12 @@ data class HomeUiState(
     // 每个包自己的 GIF 状态（key = 包 path）。包级而不是全局单值：
     // 一个目录下可能同时有多个序列帧包，各自独立生成、独立失败
     val zipGifStates: Map<String, GifState> = emptyMap(),
+    // ---- 应用更新（与服务器无关：走 GitHub Releases，未登录也能查）----
+    // 失败/需授权都在这一个字段里，刻意不写 actionHint：检查更新是次要动作，
+    // 它的失败不能盖掉「登录已过期」这类与用户当前操作直接相关的提示
+    val update: UpdateUiState = UpdateUiState.Idle,
+    // 当前安装的版本名（启动时读一次；取不到就是空串，界面显示"版本未知"）
+    val localVersionName: String = "",
 ) {
     // 左侧栏的可见分类：搜索框有内容时按展示名过滤，空查询不过滤。
     val visibleCategories: List<CategoryView>
@@ -324,6 +334,10 @@ class HomeStateHolder(
     private val authTokenStore: AuthTokenStore,
     // 时钟可注入：测试要稳定构造"已过期 token"这种场景，不能依赖真实时间流逝
     private val nowProvider: () -> Long = { currentEpochMillis() },
+    // 更新相关的两个依赖默认走真实实现（GitHub + 系统 API）；单测注入假实现来验
+    // "版本比较 / 哈希不匹配 / 签名不匹配 / 网络失败"这些现实中难以复现的分支
+    private val appUpdateClientProvider: (() -> AppUpdateClient)? = null,
+    private val appUpdatePlatformProvider: (() -> AppUpdatePlatform)? = null,
 ) : StateChannel {
 
     private val mutableState = mutableStateOf(HomeUiState())
@@ -377,6 +391,27 @@ class HomeStateHolder(
         channel = this,
         repositoryProvider = { repository },
     )
+
+    // 更新子状态机：查 GitHub 最新发布 → 下载 → 校验 → 调起安装器。
+    // 它不依赖登录态、也不依赖已保存的服务器地址（连接服务器页在未连上时就要能查更新）。
+    private val updateController = UpdateController(
+        channel = this,
+        clientProvider = {
+            appUpdateClientProvider?.invoke()
+                ?: updateClient?.let { it }
+                ?: AppUpdateClient(createDefaultHttpTransport()).also { updateClient = it }
+        },
+        platformProvider = { appUpdatePlatformProvider?.invoke() ?: createAppUpdatePlatform() },
+    )
+    private var updateClient: AppUpdateClient? = null
+
+    init {
+        // 版本号只需读一次：装完新包是新的进程，不存在"运行中版本变化"
+        val installedVersionName = updateController.localVersionName()
+        if (installedVersionName.isNotEmpty()) {
+            mutate { it.copy(localVersionName = installedVersionName) }
+        }
+    }
 
     // 收藏子状态机：收藏/游客列表、增删、是否已收藏、失败提示。
     // token 与"未登录就弹登录"都通过回调取得，自己不碰登录逻辑。
@@ -564,6 +599,31 @@ class HomeStateHolder(
      */
     suspend fun toggleFavorite() {
         favorite.toggleFavorite()
+    }
+
+    // ---- 应用更新：全部转发给更新子状态机 ----
+
+    /** 当前安装版本名（界面显示「当前版本 x.y.z」）。 */
+    fun localVersionName(): String = updateController.localVersionName()
+
+    /** 检查更新。检查中/下载中重复调用会被忽略。 */
+    suspend fun checkUpdate() {
+        updateController.check()
+    }
+
+    /** 下载并安装（仅在发现有新版本时有效）。 */
+    suspend fun downloadAndInstallUpdate() {
+        updateController.downloadAndInstall()
+    }
+
+    /** 取消下载：界面回到「可再次下载」，不报错。 */
+    fun cancelUpdate() {
+        updateController.cancel()
+    }
+
+    /** 丢弃更新区状态（换服务器/重置时用；下载中的任务由调用方取消）。 */
+    fun resetUpdate() {
+        updateController.reset()
     }
 
     // ---- 压缩包 / 序列帧：全部转发给压缩包子状态机 ----
