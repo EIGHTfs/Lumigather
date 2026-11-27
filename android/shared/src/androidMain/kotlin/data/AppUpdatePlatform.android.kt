@@ -93,12 +93,44 @@ class AndroidAppUpdatePlatform(
     /** 一次下载的结果：文件大小 + 边下边算的 sha256（省一次读盘）。 */
     private class Downloaded(val sha256: String)
 
+    /**
+     * 下载：多源轮询。
+     *
+     * 为什么不是直连 GitHub：国内直连 objects.githubusercontent.com 常年只有几十 KB/s，
+     * 8MB 的包要下三五分钟，中途断一次就前功尽弃 —— 这正是「更新超时」的主因。
+     * 公共加速器（ghfast / gh-proxy）实测能把同一份包拉到可用速度；
+     * 直连放最后作为兜底，加速器全挂时仍然能下（只是慢）。
+     */
     private fun download(
         release: RemoteRelease,
         targetFile: File,
         onProgress: (Long, Long) -> Unit,
     ): Downloaded? {
-        val connection = (URL(release.downloadUrl).openConnection() as HttpURLConnection).apply {
+        var lastFailure: Throwable? = null
+        for (prefix in DOWNLOAD_SOURCE_PREFIXES) {
+            // 前缀拼接方式就是镜像的通用约定：把完整原始 URL 接在镜像域名后面
+            val url = prefix + release.downloadUrl
+            try {
+                val result = attemptDownload(url, release, targetFile, onProgress)
+                if (result != null) return result
+                // 非 2xx（比如加速器没有缓存这个包）→ 换下一个源继续
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Throwable) {
+                lastFailure = failure
+            }
+        }
+        if (lastFailure != null) throw lastFailure
+        return null
+    }
+
+    private fun attemptDownload(
+        url: String,
+        release: RemoteRelease,
+        targetFile: File,
+        onProgress: (Long, Long) -> Unit,
+    ): Downloaded? {
+        val connection = (URL(url).openConnection() as HttpURLConnection).apply {
             connectTimeout = CONNECT_TIMEOUT_MS
             readTimeout = READ_TIMEOUT_MS
             instanceFollowRedirects = true
@@ -229,13 +261,22 @@ private val HTTP_SUCCESS_RANGE = HTTP_SUCCESS_RANGE_FIRST..HTTP_SUCCESS_RANGE_LA
 
 // 8MB 的包在局域网/宽带下都不该等太久；超时给 30 秒，比查版本宽松
 private const val CONNECT_TIMEOUT_MS = 15_000
-private const val READ_TIMEOUT_MS = 30_000
+// 单次读的间隔上限。慢速链路上每块可能隔很久，30s 会在下载中途误判超时
+private const val READ_TIMEOUT_MS = 60_000
 private const val BUFFER_SIZE = 64 * 1024
 
 private const val BYTE_MASK = 0xFF
 private const val HEX_SHIFT = 4
 private const val HEX_LOW_MASK = 0x0F
 private const val HEX_DIGITS = "0123456789abcdef"
+
+// 下载源前缀，按尝试顺序。空串表示直连 GitHub —— 放最后：它最稳但最慢。
+// 这两个加速器是公开服务，与参考实现同一类方案（镜像优先、GitHub 兜底）。
+private val DOWNLOAD_SOURCE_PREFIXES = listOf(
+    "https://ghfast.top/",
+    "https://gh-proxy.com/",
+    "",
+)
 
 private const val DOWNLOAD_FAILED_MESSAGE = "下载失败，请检查网络后重试"
 private const val NO_INSTALLER_MESSAGE = "没有可用的安装器"

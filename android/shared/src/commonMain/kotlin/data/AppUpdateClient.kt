@@ -31,7 +31,16 @@ class AppUpdateClient(
     private val transport: HttpTransport,
     private val releasesUrl: String = DEFAULT_RELEASES_URL,
     private val timeoutMs: Long = RELEASE_TIMEOUT_MS,
+    /** 时间源可注入：测试能稳定构造"缓存已过期"，不用真等 5 分钟。 */
+    private val nowProvider: () -> Long = { currentEpochMillis() },
 ) {
+
+    // 版本信息缓存。
+    // 为什么需要：GitHub 未认证 API 每小时只有 60 次配额，用户在连接页反复点「检查更新」
+    // 几次就会吃到 429（界面上看起来像"访问太频繁"），而版本号几分钟内根本不会变。
+    // 缓存既不影响及时性，又让重复点击完全不消耗配额。
+    private var cachedRelease: RemoteRelease? = null
+    private var cachedAtMillis: Long = 0L
 
     /**
      * 查最新发布。
@@ -40,6 +49,13 @@ class AppUpdateClient(
      * 否则用户会以为是自己网络的问题，反复重试。
      */
     suspend fun fetchLatestRelease(): ApiResult<RemoteRelease> {
+        // 命中缓存直接返回：重复点击不消耗 GitHub 配额（见字段注释）
+        cachedRelease?.let { cached ->
+            if (nowProvider() - cachedAtMillis < RELEASE_CACHE_TTL_MS) {
+                return ApiResult.Ok(cached)
+            }
+        }
+
         val raw = try {
             transport.get(releasesUrl, emptyMap(), timeoutMs)
         } catch (cancelled: CancellationException) {
@@ -63,6 +79,8 @@ class AppUpdateClient(
         } catch (failure: Throwable) {
             return ApiResult.Err(ApiError.Parse(describeFailure(failure), raw.bodyText.take(200)))
         }
+        cachedRelease = release
+        cachedAtMillis = nowProvider()
         return ApiResult.Ok(release)
     }
 }
@@ -125,7 +143,11 @@ private const val HTTP_FORBIDDEN = 403
 private const val HTTP_TOO_MANY_REQUESTS = 429
 
 // 查版本不该让用户等太久：GitHub 在国内可能慢，10 秒没响应就报超时
-private const val RELEASE_TIMEOUT_MS = 10_000L
+// 检查更新的超时：GitHub API 在移动网络下首包经常要好几秒，10s 容易误判失败
+private const val RELEASE_TIMEOUT_MS = 25_000L
+
+// 版本信息缓存时长：远小于"发版频率"，但足以吃掉用户的连续点击
+private const val RELEASE_CACHE_TTL_MS = 5 * 60 * 1000L
 
 private const val NO_RELEASE_MESSAGE = "仓库还没有发布版本"
 private const val RATE_LIMITED_MESSAGE = "GitHub 访问过于频繁，请稍后再试"
