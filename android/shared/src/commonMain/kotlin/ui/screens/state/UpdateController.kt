@@ -38,7 +38,7 @@ sealed interface UpdateUiState {
     data object InstallStarted : UpdateUiState
 
     /** 缺「安装未知应用」授权：引导用户去系统设置后回来再点一次。 */
-    data class NeedPermission(val appLabel: String) : UpdateUiState
+    data class NeedPermission(val appLabel: String, val release: RemoteRelease) : UpdateUiState
 
     /** 失败原因（网络/404/校验不通过…），直接内联显示。 */
     data class Failed(val message: String) : UpdateUiState
@@ -108,9 +108,16 @@ class UpdateController(
      * 四个退出分支各自对应一种用户可感知的结局：已调起安装 / 需授权 / 校验拒绝 / 普通失败。
      */
     suspend fun downloadAndInstall() {
+        // 两种状态都允许继续：
+        // Available      = 刚查完，还没下过
+        // NeedPermission = 已经下完并校验过，只差系统「安装未知应用」授权。
+        //   授权回来后用户点重试，若只认 Available 就会直接 return —— 按钮变成死键。
         val current = channel.state.update
-        if (current !is UpdateUiState.Available) return
-        val release = current.release
+        val release = when (current) {
+            is UpdateUiState.Available -> current.release
+            is UpdateUiState.NeedPermission -> current.release
+            else -> return
+        }
 
         cancelRequested = false
         channel.mutate {
@@ -151,7 +158,7 @@ class UpdateController(
     // 结果 → UI 状态。校验拒绝与普通失败分开：前者是安全事件，界面上要让用户意识到严重性
     private fun toUiState(result: InstallResult, release: RemoteRelease): UpdateUiState = when (result) {
         InstallResult.Started -> UpdateUiState.InstallStarted
-        is InstallResult.NeedInstallPermission -> UpdateUiState.NeedPermission(result.appLabel)
+        is InstallResult.NeedInstallPermission -> UpdateUiState.NeedPermission(result.appLabel, release)
         is InstallResult.Rejected -> UpdateUiState.Failed(result.message)
         is InstallResult.Failed -> UpdateUiState.Failed(result.message)
     }

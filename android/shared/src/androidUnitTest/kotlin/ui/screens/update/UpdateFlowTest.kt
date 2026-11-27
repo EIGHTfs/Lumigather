@@ -290,6 +290,25 @@ class UpdateFlowTest {
     }
 
     @Test
+    fun retryingAfterPermissionGrantRunsDownloadAgain() = runBlocking {
+        // 回归：在系统设置里授权「安装未知应用」后回到 App，再点重试必须真的执行。
+        // 旧实现的状态保护只认 Available，NeedPermission 下直接 return —— 按钮看得见但点不动。
+        val platform = FakeUpdatePlatform(result = InstallResult.NeedInstallPermission("拾光集"))
+        val stateHolder = holder(ReleaseTransport(), platform)
+        stateHolder.checkUpdate()
+        stateHolder.downloadAndInstallUpdate()
+        assertTrue(stateHolder.state.update is UpdateUiState.NeedPermission, "前提：应停在需授权")
+
+        stateHolder.downloadAndInstallUpdate()
+
+        assertEquals(
+            2,
+            platform.downloadCalls,
+            "授权后重试必须再执行一次下载/安装，而不是被状态保护静默 return",
+        )
+    }
+
+    @Test
     fun progressIsPublishedAndCancelReturnsToDownloadable() = runBlocking {
         // 8MB 的包按 512KB 节流：全部回调都会经过，状态里留下最后一条
         val platform = FakeUpdatePlatform(
