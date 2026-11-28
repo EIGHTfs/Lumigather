@@ -59,7 +59,15 @@ class ArchiveController(
 
         when (val result = activeRepository.scanArchives(dir)) {
             is ApiResult.Ok -> channel.mutate {
-                it.copy(archives = result.value, archivesLoading = false, archiveScanError = null)
+                it.copy(
+                    // 服务端的 /zip/scan 是**递归**扫描：返回的包里混着当前层、上一层、更深子目录里的。
+                    // 全都当本层显示会让一个只有子目录的目录被上百个「压缩包」卡片淹没，
+                    // 而且点开还会触发合成动图（那些包多半不是序列帧），看起来就像客户端乱处理。
+                    // 这里只保留「直接父目录就是当前目录」的包，子目录里的留给进入子目录时再扫。
+                    archives = result.value.filter { entry -> parentOf(entry.path) == trimTrailingSlash(dir) },
+                    archivesLoading = false,
+                    archiveScanError = null,
+                )
             }
 
             is ApiResult.Err -> channel.mutate {
@@ -230,9 +238,21 @@ sealed class GifState {
     data class Generating(val url: String) : GifState()
     data class Ready(val url: String) : GifState()
     data class Failed(val message: String) : GifState()
+
 }
 
 private const val SCAN_FAILED_PREFIX = "扫描压缩包失败："
 private const val SCAN_FAILED_GENERIC = "扫描压缩包失败，请稍后重试"
 private const val GIF_FAILED_PREFIX = "合成动图失败："
 private const val GIF_FAILED_GENERIC = "合成动图失败，请稍后重试"
+
+// 路径工具（纯函数，便于单测）：判断压缩包是否**直接**位于某个目录下。
+// 服务端 /zip/scan 是递归的，不带这层过滤就会把子目录里的包也列到当前层。
+private fun parentOf(path: String): String {
+    val trimmed = path.trimEnd('/')
+    val cut = trimmed.lastIndexOf('/')
+    return if (cut <= 0) "" else trimmed.substring(0, cut)
+}
+
+private fun trimTrailingSlash(path: String): String =
+    if (path.length > 1) path.trimEnd('/') else path

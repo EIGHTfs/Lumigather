@@ -152,21 +152,27 @@ fun AppRoot(
  * 返回键分级处理。
  *
  * 规则：登录弹层开着 → 关弹层；设置界面（且已有旧配置）→ 退回主界面；侧栏开着 → 收起侧栏；
- * 都没有 → 什么都不注册。
+ * 在子目录里 → 返回上一级目录；都没有 → 什么都不注册。
  *
  * 为什么"没有就不注册"是硬要求：Kuikly 判断一次返回是否被消费，依据是页面返回回调列表是否非空
  * （Pager 收到 back 事件时先看 getBackPressHandler().backPressCallbackList，非空才回
  * consumed=1 并分发给我们）。常驻注册会让每次返回都被消费，用户就再也退不出应用。
  *
  * 顺序也是要求：弹层盖在最上面，返回就该先关它，而不是把底下的设置页退掉。
+ * 目录上级排在侧栏之后：侧栏是叠加层，先关叠加层再退目录。
  */
 @Composable
 private fun registerBackHandling(state: HomeUiState, stateHolder: HomeStateHolder) {
+    // goUp 是 suspend（要发请求拉上一级），而 BackHandler 回调不是挂起上下文，所以借一个 scope。
+    val actionScope = rememberCoroutineScope()
     when {
         state.loginSheetOpen -> BackHandler { stateHolder.closeLoginSheet() }
         state.settingsOpen && state.hasSavedAddress -> BackHandler { stateHolder.closeSettings() }
         state.settingsOpen -> Unit
         state.leftSidebarOpen || state.rightSidebarOpen -> BackHandler { stateHolder.closeSidebars() }
+        // 在子目录里：返回上一级。缺了这一条，Kuikly 不注册回调 → 系统默认退出 App，
+        // 用户点返回就直接回到桌面，而不是退回上级目录。
+        state.canGoUp -> BackHandler { actionScope.launch { stateHolder.goUp() } }
         else -> Unit
     }
 }
