@@ -58,6 +58,11 @@ fun ImageCellBlock(
     val metrics = AppTheme.metrics
     val shape = RoundedCornerShape(metrics.radiusSm)
 
+    // 激活视觉的唯一来源：0f = 常态，1f = 放大态。
+    // 现在只有 0/1 两种取值；将来的过渡动画就是把这一行换成一个连续进度，
+    // 描边（宽度 + 透明度）全部从它派生 —— 这是本轮刻意留出的干净插入点。
+    val highlightAmount = if (highlighted) 1f else 0f
+
     // 换图（url 变化）就重置为加载中，否则会短暂保留上一张的失败态
     var loadedPhase by remember(imageUrl) { mutableStateOf(ImageCellState.Loading) }
     val painter = rememberAsyncImagePainter(
@@ -73,12 +78,20 @@ fun ImageCellBlock(
             .aspectRatio(1f)
             .clip(shape)
             .background(colors.container)
-            .then(
-                if (highlighted) {
-                    Modifier.border(metrics.thicknessRule * HIGHLIGHT_BORDER_SCALE, colors.primary, shape)
-                } else {
-                    Modifier
-                }
+            // 激活描边：**无条件挂上**，只让宽度/透明度随 highlightAmount 变。
+            //
+            // 不写成 `if (highlighted) Modifier.border(...) else Modifier` 的原因：
+            // Kuikly 下把 border 条件性挂载/移除时，收起那一刻的绘制层不会跟着重画，
+            // 会留下"回 1×1 了但描边还在"的残影。改成"结构不变、只变参数"就没有这个刷新问题。
+            //
+            // ↓↓↓ 动画接入点 ↓↓↓
+            // 将来要做过渡动画时，**只改 highlightAmount 的来源**（把下面这行的 0f/1f
+            // 换成 animateFloatAsState 之类驱动的 0f..1f 进度），描边宽度与透明度都从它派生，
+            // 调用方与 Modifier 链都不用动。
+            .border(
+                width = metrics.thicknessRule * HIGHLIGHT_BORDER_SCALE * highlightAmount,
+                color = colors.primary.copy(alpha = highlightAmount),
+                shape = shape,
             )
             .then(gestureModifier(onClick = onClick, onLongClick = onLongClick))
     ) {
