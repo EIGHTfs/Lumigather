@@ -86,7 +86,16 @@ class LumigatherRepository(private val api: ApiClient) {
     suspend fun loadUploaded(): ApiResult<List<UploadedEntry>> = api.fetchUploaded()
 
     // 目录层级：按需加载单层（本层图片 + 子目录统计）
-    suspend fun loadDir(root: String, path: String): ApiResult<DirPage> = api.fetchDir(root, path)
+    // 目录层级浏览也要把相对地址物化成绝对地址 —— 与 withAbsoluteUrls 同样的理由：
+    // UI 只拿到能直接加载的地址，不自己拼。
+    //
+    // 注意子目录的 leafImages 同样要物化：那是「无子目录的层次里直接摊开的图」，
+    // 它们会原样变成网格里的 Picture 条目，漏掉这一支就等于这些图全部显示为空白。
+    suspend fun loadDir(root: String, path: String): ApiResult<DirPage> =
+        when (val result = api.fetchDir(root, path)) {
+            is ApiResult.Ok -> ApiResult.Ok(withAbsoluteUrls(result.value))
+            is ApiResult.Err -> result
+        }
 
     // 压缩包与序列帧：仓库只做转发，客户端不做任何解压/编码/ini 解析。
     suspend fun scanArchives(dir: String): ApiResult<List<ArchiveEntry>> = api.scanArchives(dir)
@@ -214,6 +223,19 @@ class LumigatherRepository(private val api: ApiClient) {
     // 把服务端相对地址物化成绝对地址：UI 不必也不应该自己拼。
     private fun withAbsoluteUrls(page: PagedImages): PagedImages =
         page.copy(images = page.images.map { it.copy(absoluteUrl = api.resolveUrl(it.relativeUrl)) })
+
+    // 目录层级同理，且要多处理一支：subdirs[].leafImages。
+    // 那些是「没有子目录的层次直接摊开显示的图」，会原样进网格，漏物化就全是空白格。
+    private fun withAbsoluteUrls(page: DirPage): DirPage = page.copy(
+        images = page.images.map { it.copy(absoluteUrl = api.resolveUrl(it.relativeUrl)) },
+        subdirs = page.subdirs.map { subdir ->
+            subdir.copy(
+                leafImages = subdir.leafImages.map {
+                    it.copy(absoluteUrl = api.resolveUrl(it.relativeUrl))
+                },
+            )
+        },
+    )
 
     // 分类名 → 绝对路径。用 associate 而不是逐项查找：8 项规模下差异可忽略，但语义更清楚。
     // 同名分类重复配置时后一条覆盖前一条（后端配置问题，取最后一个更符合"后来改的生效"直觉）。

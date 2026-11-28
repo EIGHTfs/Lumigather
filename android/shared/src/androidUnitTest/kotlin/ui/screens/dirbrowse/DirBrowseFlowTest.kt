@@ -266,4 +266,27 @@ class DirBrowseFlowTest {
         stateHolder.selectFilter(ContentFilter.Guest)
         assertTrue(stateHolder.state.gridEntries.all { entry -> entry is GridEntry.Picture })
     }
+
+    @Test
+    fun gridPicturesCarryAbsoluteUrlsIncludingLeafImages() = runBlocking {
+        // 回归：absoluteUrl 只在仓库层物化（Models 里约定「由仓库层填好后交给 UI」）。
+        // 漏掉这一步时，图片仍能点开详情（详情用的是 path / sizeText），
+        // 但网格里每张图都是空白格 —— UI 加载的是 absoluteUrl。
+        //
+        // 同时覆盖两支来源：本层 images 与叶子目录摊开的 leafImages，
+        // 两者都必须物化，只修一支仍会留下空白格。
+        val stateHolder = holder()
+        stateHolder.bootstrap()
+
+        val pictures = stateHolder.state.gridEntries.pictures()
+        assertTrue(pictures.isNotEmpty(), "前提：这一层应当有图片条目")
+
+        val blank = pictures.filterNot { it.item.absoluteUrl.startsWith("http") }
+        assertTrue(
+            blank.isEmpty(),
+            "这些图没有绝对地址，界面上会是空白格：" +
+                blank.joinToString { "${it.item.name} -> '${it.item.absoluteUrl}'" },
+        )
+    }
+
 }
