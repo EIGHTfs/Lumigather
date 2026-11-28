@@ -138,7 +138,7 @@ internal fun extractServerError(json: JSONObject): String = json.optString(Field
  * "http://host:port/api/media?..." 与 "/api/media?..." 被当成两张图。
  */
 internal fun parseFavoriteEntry(json: JSONObject): FavoriteEntry = FavoriteEntry(
-    src = MediaSrc.normalize(json.optString(Field.SRC, "")),
+    src = json.optString(Field.SRC, ""),
     name = json.optString(Field.NAME, ""),
     title = json.optString(Field.TITLE, ""),
     cat = json.optString(Field.CAT, ""),
@@ -151,7 +151,7 @@ internal fun parseFavoriteEntry(json: JSONObject): FavoriteEntry = FavoriteEntry
 /** 游客上传条目 → 模型。同样规范化 src（服务端下发的是 /uploads/xxx 相对地址）。 */
 internal fun parseUploadedEntry(json: JSONObject): UploadedEntry = UploadedEntry(
     id = json.optString(Field.ID, ""),
-    src = MediaSrc.normalize(json.optString(Field.SRC, "")),
+    src = json.optString(Field.SRC, ""),
     url = json.optString(Field.URL, ""),
     name = json.optString(Field.NAME, ""),
     title = json.optString(Field.TITLE, ""),

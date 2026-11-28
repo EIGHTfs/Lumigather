@@ -260,10 +260,13 @@ class FavoriteFlowTest {
     }
 
     @Test
-    fun absoluteUrlInStoredFavoriteStillMatchesRelativeSelection() = runBlocking {
-        // 旧数据：src 存的是完整 URL（换端口就会裂的那种）；当前选中图给的是相对路径
+    fun favoriteWithCanonicalRelativeSrcMatchesSelection() = runBlocking {
+        // 契约：服务端在写入侧规范化 src（server/routes/favorites.js 的 normalizeMediaSrc），
+        // 下发的收藏记录一律是相对形态。客户端只做直接比对，不再自行归一化。
+        // 原用例「完整 URL 与相对路径应判为同一文件」随客户端 normalize 一起删除 ——
+        // 该场景已在服务端根治，客户端再去兼容就是第二份实现。
         val transport = FavoritesTransport(
-            favoritesJson = """[{"src":"$SAMPLE_BASE_URL/api/media?file=%2Fa.png","name":"a.png"}]""",
+            favoritesJson = """[{"src":"/api/media?file=%2Fa.png","name":"a.png"}]""",
         )
         val stateHolder = holder(transport)
         stateHolder.bootstrap()
@@ -271,21 +274,22 @@ class FavoriteFlowTest {
 
         assertTrue(
             stateHolder.state.isCurrentImageFavorite,
-            "完整 URL 与相对路径规范化后指向同一文件，必须判为已收藏",
+            "服务端下发的相对 src 与选中图的相对路径相同，应判为已收藏",
         )
     }
 
     @Test
-    fun duplicatedSrcInDifferentFormsIsDedupedInList() = runBlocking {
+    fun duplicatedEntriesWithIdenticalSrcAreNotDoubleCounted() = runBlocking {
+        // 服务端新增时已按规范化后的 src 去重，这里验证客户端拿到重复数据时也不会重复展示
         val transport = FavoritesTransport(
             favoritesJson = """[
                 {"src":"/api/media?file=%2Fa.png","name":"a.png"},
-                {"src":"$SAMPLE_BASE_URL/api/media?file=%2Fa.png","name":"a.png"}]""",
+                {"src":"/api/media?file=%2Fa.png","name":"a.png"}]""",
         )
         val stateHolder = holder(transport)
         stateHolder.bootstrap()
 
-        assertEquals(1, stateHolder.state.favoriteImages.size, "同一文件的两种写法只应展示一条")
+        assertEquals(1, stateHolder.state.favoriteImages.size, "同一 src 只应展示一条")
         assertEquals(1, stateHolder.state.favoriteSrcs.size)
     }
 

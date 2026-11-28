@@ -33,11 +33,29 @@ function apiGetFavorites(req, res) {
   jsonRes(res, 200, loadFavorites());
 }
 
+// 媒体地址规范化：剥掉 scheme / host / port，只保留 pathname + search。
+//
+// 为什么必须在写入侧做：收藏的查重与删除都按 src 字符串**精确匹配**。
+// 一旦同一文件存在两种写法（`http://host:8081/api/media?file=...` 与 `/api/media?file=...`），
+// 就会被判成两张图 —— 表现为「明明收藏过却显示未收藏」，再点一次又多一条。
+//
+// 放在服务端的理由：客户端各写一份必然漂移（本项目曾经就是客户端在做归一化）。
+// 服务端在这里统一一次，所有客户端都不用管。
+// 不依赖 req.headers.host（反代下不可靠），直接用正则剥前缀。
+function normalizeMediaSrc(src) {
+  if (typeof src !== "string") return "";
+  const trimmed = src.trim();
+  if (!trimmed) return "";
+  const stripped = trimmed.replace(/^[a-zA-Z][\w+.-]*:\/\/[^/]+/, "");
+  return stripped.startsWith("/") ? stripped : "/" + stripped;
+}
+
 // POST /api/favorites — 添加收藏（需登录）
 async function apiPostFavorite(req, res, ctx) {
   if (!ctx.requireAuth(req, res)) return;
   const body = await readJsonBody(req);
-  const { src, name, title, cat, dir, size, root } = body;
+  const { name, title, cat, dir, size, root } = body;
+  const src = normalizeMediaSrc(body.src);
   if (!src) return jsonRes(res, 400, { error: "src required" });
   const favs = loadFavorites();
   if (favs.find((f) => f.src === src)) {
@@ -52,7 +70,8 @@ async function apiPostFavorite(req, res, ctx) {
 async function apiDeleteFavorite(req, res, ctx) {
   if (!ctx.requireAuth(req, res)) return;
   const body = await readJsonBody(req);
-  const { src } = body || {};
+  // 删除同样要规范化：否则客户端用绝对地址来删就会「删不掉」（存的是相对形态）。
+  const src = normalizeMediaSrc(body?.src);
   if (!src) return jsonRes(res, 400, { error: "src required" });
   let favs = loadFavorites();
   favs = favs.filter((f) => f.src !== src);

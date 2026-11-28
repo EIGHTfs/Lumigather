@@ -74,7 +74,7 @@ class FavoriteController(
         if (current.favoriteActionSrc.isNotEmpty()) return
 
         val activeRepository = repositoryProvider() ?: return
-        val src = MediaSrc.normalize(image.relativeUrl)
+        val src = image.relativeUrl
         if (src.isEmpty()) {
             channel.mutate { it.copy(actionHint = NO_MEDIA_SRC) }
             return

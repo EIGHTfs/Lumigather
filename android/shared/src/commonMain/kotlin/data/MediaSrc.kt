@@ -1,55 +1,26 @@
-// 媒体地址规范化：让「绝对地址」和「相对地址」变成同一种可比对的形式。
+// 媒体地址比对。
 //
-// 为什么必须做：收藏数据里旧的 src 可能存的是完整 URL（`http://host:8081/api/media?file=...`），
-// 服务端换端口或用户换地址后，同一个文件就有了两种写法 —— 直接按字符串比对会把它当成两张图，
-// 于是"明明收藏过却显示未收藏"，再点一次就又多一条收藏。
+// 历史：这里曾有一个 normalize()，把「绝对地址」与「相对地址」统一成 pathname + search，
+// 用来消化旧收藏数据里存过完整 URL（`http://host:8081/api/media?file=...`）的情况。
 //
-// 规则很简单：只保留 pathname + search，丢掉 scheme / host / port。
-// `http://h:8081/api/media?file=%2Fa.png` → `/api/media?file=%2Fa.png`
-// 已经是相对路径的原样（补一个前导斜杠），空串仍然是空串。
+// 现在它被移到了服务端（`server/routes/favorites.js` 的 normalizeMediaSrc）：
+// 收藏的查重与删除都在写入侧规范化，存进 favorites.json 的一律是相对路径。
+// 实测确认：2026-11-28 线上 192 条收藏全部为相对路径，无一条带 host。
 //
-// 放在数据层而不是 UI：数据层解析收藏列表时要规范化一次，状态层比对"这张图收没收藏"又要用一次，
-// 两边必须是同一份实现 —— 两处各写一份迟早会出现"解析时规范了、比对时没规范"的错配。
-//
-// ⚠️ 技术债（已知，暂留）：这是**为历史数据兜底**，不是服务端已经算好的结论。
-// 旧收藏记录里存过完整 URL，服务端至今原样返回，客户端只能在比对时规范化。
-// 更干净的做法是服务端一次性迁移旧记录（把 src 统一成 `/api/media?file=...`），
-// 迁移完成后这个 object 与它的调用点都可以删掉。风险：现在就删会让旧收藏在换端口后
-// 全部失配（"明明收藏过却显示未收藏"），所以先留、并且只留这一份实现。
+// 为什么不再放客户端：每个客户端各写一份必然漂移（本项目就是先有客户端版、
+// 而服务端仍原样存原文），而「同一份数据的比对规则」只应该有一个权威实现。
+// 客户端现在只负责比对，不负责修补数据形态。
 
 package com.eightfs.lumigather.data
 
 object MediaSrc {
 
-    private const val SCHEME_SEPARATOR = "://"
-    private const val PATH_SEPARATOR = "/"
-
-    /** 规范化一个媒体地址；无法解析时返回空串（调用方应把它当作"没有有效地址"）。 */
-    fun normalize(raw: String): String {
-        val trimmed = raw.trim()
-        if (trimmed.isEmpty()) return ""
-
-        val schemeIndex = trimmed.indexOf(SCHEME_SEPARATOR)
-        if (schemeIndex < 0) {
-            // 已经是相对路径（服务端下发的就是这个形态），只保证有前导斜杠
-            return if (trimmed.startsWith(PATH_SEPARATOR)) trimmed else PATH_SEPARATOR + trimmed
-        }
-
-        val afterScheme = trimmed.substring(schemeIndex + SCHEME_SEPARATOR.length)
-        val pathIndex = afterScheme.indexOf(PATH_SEPARATOR)
-        // "http://host" 这种没有路径的地址不指向任何文件，按空串处理
-        if (pathIndex < 0) return ""
-        return afterScheme.substring(pathIndex)
-    }
-
     /**
      * 两个地址是否指向同一个媒体。
      *
-     * 空串一律不算"相同"：两个都解析失败时相等没有意义，把"未知"当成"已收藏"会让用户点不掉。
+     * 空串一律不算"相同"：两个都为空时相等没有意义，把"未知"当成"已收藏"会让用户点不掉。
+     * 服务端下发的 src 已是相对路径，这里直接比字符串即可。
      */
-    fun isSame(first: String, second: String): Boolean {
-        val normalizedFirst = normalize(first)
-        val normalizedSecond = normalize(second)
-        return normalizedFirst.isNotEmpty() && normalizedFirst == normalizedSecond
-    }
+    fun isSame(first: String, second: String): Boolean =
+        first.isNotEmpty() && first == second
 }

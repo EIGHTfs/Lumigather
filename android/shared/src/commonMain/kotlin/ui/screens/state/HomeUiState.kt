@@ -299,7 +299,7 @@ data class HomeUiState(
     val isCurrentImageFavorite: Boolean
         get() {
             val image = selectedImage ?: return false
-            return MediaSrc.normalize(image.relativeUrl) in favoriteSrcs
+            return image.relativeUrl in favoriteSrcs
         }
 
     // ---- 压缩包 ----
@@ -319,7 +319,7 @@ data class HomeUiState(
         get() {
             val image = selectedImage ?: return false
             return favoriteActionSrc.isNotEmpty() &&
-                favoriteActionSrc == MediaSrc.normalize(image.relativeUrl)
+                favoriteActionSrc == image.relativeUrl
         }
 
     // 登录按钮可不可点：冷却中、提交中都不行；密码为空也不行 —— 除非这台服务器压根没设密码

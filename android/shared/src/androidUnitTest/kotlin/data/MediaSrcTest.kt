@@ -1,58 +1,45 @@
-// src 规范化的单测：收藏的比对与去重全靠这一个函数，错一位就会"收藏过却显示未收藏"。
+// 媒体地址比对。
 //
-// 这里只测纯函数本身（不构造 holder）：它是这条链路上唯一与 UI/网络无关、可以被穷举验证的一环。
+// 历史：这里原本还测过 normalize()（剥 scheme/host、补前导斜杠），
+// 那是为旧收藏数据里带 host 的 src 做兜底。该职责已移到服务端
+// （server/routes/favorites.js 的 normalizeMediaSrc，写入侧统一规范化），
+// 客户端现在只做比对，所以那些归一化用例随实现一起删除。
+// 实测依据：2026-11-28 线上 192 条收藏全部为相对路径，无一条带 host。
 
 package com.eightfs.lumigather.data
 
 import kotlin.test.Test
-import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class MediaSrcTest {
 
     @Test
-    fun absoluteUrlKeepsOnlyPathAndQuery() {
-        assertEquals(
-            "/api/media?file=%2Fa%2Fb.png",
-            MediaSrc.normalize("http://any-host:9999/api/media?file=%2Fa%2Fb.png"),
-        )
-    }
-
-    @Test
-    fun relativeUrlIsKeptAndGainsLeadingSlash() {
-        assertEquals("/api/media?file=%2Fa.png", MediaSrc.normalize("/api/media?file=%2Fa.png"))
-        assertEquals("/api/media?file=%2Fa.png", MediaSrc.normalize("api/media?file=%2Fa.png"))
-    }
-
-    @Test
-    fun sameFileInTwoFormsComparesEqual() {
+    fun sameRelativeSrcComparesEqual() {
+        // 服务端下发的 src 一律是相对形态，直接字符串相等即为同一张图
         assertTrue(
             MediaSrc.isSame(
-                "http://server.test/api/media?file=%2Froot%2Fa.png",
-                "/api/media?file=%2Froot%2Fa.png",
-            ),
-        )
-        // 换端口也还是同一张图（host/port 被丢掉）
-        assertTrue(
-            MediaSrc.isSame(
-                "http://other-host:9999/api/media?file=%2Fa.png",
-                "/api/media?file=%2Fa.png",
+                "/api/media?file=%2Fvolume6%2Fa%2Fb.png",
+                "/api/media?file=%2Fvolume6%2Fa%2Fb.png",
             ),
         )
     }
 
     @Test
     fun differentFilesAreNotSame() {
-        assertFalse(MediaSrc.isSame("/api/media?file=%2Fa.png", "/api/media?file=%2Fb.png"))
+        assertFalse(
+            MediaSrc.isSame(
+                "/api/media?file=%2Fa.png",
+                "/api/media?file=%2Fb.png",
+            ),
+        )
     }
 
     @Test
-    fun emptyOrHostlessInputsAreNotComparable() {
-        assertEquals("", MediaSrc.normalize(""))
-        assertEquals("", MediaSrc.normalize("   "))
-        assertEquals("", MediaSrc.normalize("http://server.test"))
-        // 两个都解析失败时不能算"相同"，否则"未知"会被当成"已收藏"而点不掉
-        assertFalse(MediaSrc.isSame("", ""))
+    fun emptySrcIsNeverSame() {
+        // 两个都为空时"相等"没有意义：把"未知"当成"已收藏"会让用户点不掉收藏
+        assertFalse(MediaSrc.isSame("", ""), "空串不能算同一张图")
+        assertFalse(MediaSrc.isSame("", "/api/media?file=%2Fa.png"))
+        assertFalse(MediaSrc.isSame("/api/media?file=%2Fa.png", ""))
     }
 }

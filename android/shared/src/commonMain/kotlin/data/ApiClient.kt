@@ -239,7 +239,7 @@ class ApiClient(
      */
     suspend fun addFavorite(request: FavoriteRequest, token: String): ApiResult<FavoriteMutation> {
         val body = JSONObject().apply {
-            put(BODY_SRC, MediaSrc.normalize(request.src))
+            put(BODY_SRC, request.src)
             put(BODY_NAME, request.name)
             put(BODY_TITLE, request.title)
             put(BODY_CAT, request.cat)
@@ -252,7 +252,7 @@ class ApiClient(
 
     /** DELETE /api/favorites —— 需登录；后端从请求体里读 `{src}`（不是路径参数）。 */
     suspend fun removeFavorite(src: String, token: String): ApiResult<List<FavoriteEntry>> {
-        val body = JSONObject().put(BODY_SRC, MediaSrc.normalize(src)).toString()
+        val body = JSONObject().put(BODY_SRC, src).toString()
         // 数组缺失时会返回空列表：服务端异常降级也不该让客户端崩
         return writeJson(ENDPOINT_FAVORITES, body, token, isDelete = true, parse = ::parseFavoritesField)
     }
