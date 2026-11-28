@@ -97,17 +97,12 @@ class LumigatherRepository(private val api: ApiClient) {
             is ApiResult.Err -> result
         }
 
-    // 压缩包与序列帧：仓库只做转发，客户端不做任何解压/编码/ini 解析。
+    // 压缩包：仓库只做转发，客户端不做任何解压/编码/ini 解析。
+    // 包内图直接给可加载的绝对 URL（/api/zip/img 逐张给图），没有"合成动图"这条路径 ——
+    // 该不该合成、怎么合成、失败原因，全部归服务端。
     suspend fun scanArchives(dir: String): ApiResult<List<ArchiveEntry>> = api.scanArchives(dir)
 
     fun zipImageUrl(zipPath: String, entryName: String): String = api.zipImageUrl(zipPath, entryName)
-
-    fun directoryGifUrl(dir: String): String = api.directoryGifUrl(dir)
-
-    fun zipGifUrl(zipPath: String): String = api.zipGifUrl(zipPath)
-
-    // GIF 拉取失败时再问一次原因（服务端 400 会带中文 error）
-    suspend fun gifFailureText(url: String): String = api.fetchFailureText(url)
 
     // 把相对媒体地址拼成绝对地址。收藏条目只有相对 src，而网格/详情栏要的是可直接加载的绝对地址 ——
     // 拼接规则（baseUrl 归一化、子路径前缀、不二次编码）只在 ApiClient 里有一份，这里只是暴露出来。

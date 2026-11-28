@@ -120,7 +120,6 @@ private fun holder(transport: HttpTransport = DirTransport()): HomeStateHolder =
 
 private fun List<GridEntry>.folders(): List<GridEntry.Folder> = filterIsInstance<GridEntry.Folder>()
 private fun List<GridEntry>.pictures(): List<GridEntry.Picture> = filterIsInstance<GridEntry.Picture>()
-private fun List<GridEntry>.archives(): List<GridEntry.Archive> = filterIsInstance<GridEntry.Archive>()
 
 class DirBrowseFlowTest {
 
@@ -164,15 +163,15 @@ class DirBrowseFlowTest {
     }
 
     @Test
-    fun archivesWithImagesProduceArchiveEntriesOnly() = runBlocking {
+    fun archivesWithImagesProducePicturesWithoutArchiveEntry() = runBlocking {
         val stateHolder = holder()
         stateHolder.bootstrap()
 
-        val archives = stateHolder.state.gridEntries.archives()
-
-        assertEquals(1, archives.size, "只有含图的包才出现在网格里")
-        assertEquals("mod.zip", archives.single().name)
-        assertEquals(2, archives.single().imageCount)
+        // 含图包不再产出"压缩包条目"：它的图直接成为 Picture 条目（空包则一张都不产出）
+        assertEquals(1, stateHolder.state.archives.size, "只有含图的包留在状态里")
+        assertEquals(2, stateHolder.state.archiveImages.size, "mod.zip 里 2 张图应全部摊平")
+        val pictureNames = stateHolder.state.gridEntries.pictures().map { entry -> entry.item.name }
+        assertTrue(pictureNames.containsAll(listOf("a.png", "b.png")), "实际：$pictureNames")
     }
 
     @Test
@@ -186,7 +185,11 @@ class DirBrowseFlowTest {
 
         assertEquals(listOf(SAMPLE_CATEGORY_NAME, "Mods"), stateHolder.state.breadcrumbs)
         assertTrue(stateHolder.state.canGoUp)
-        assertEquals("mod-1.png", stateHolder.state.gridEntries.pictures().single().item.name)
+        // 用 any 而不是 single：子目录里可能有压缩包，包内图也会摊进网格
+        assertTrue(
+            stateHolder.state.gridEntries.pictures().any { entry -> entry.item.name == "mod-1.png" },
+            "进入子目录后应显示该层的图",
+        )
     }
 
     @Test
@@ -234,22 +237,15 @@ class DirBrowseFlowTest {
     }
 
     @Test
-    fun openingArchiveSwitchesGridToArchiveImages() = runBlocking {
+    fun archiveImagesAreTiledIntoTheSameGridAsPictures() = runBlocking {
         val stateHolder = holder()
         stateHolder.bootstrap()
-        val archiveEntry = stateHolder.state.archives.first { it.name == "mod.zip" }
 
-        stateHolder.openArchive(archiveEntry.path)
-
-        assertEquals(2, stateHolder.state.gridEntries.size, "包内应有 2 张图")
-        assertTrue(
-            stateHolder.state.gridEntries.all { entry -> entry is GridEntry.Picture },
-            "包内视图全是图片条目",
-        )
-        assertTrue(stateHolder.state.canGoUp, "包内视图要能返回目录层")
-
-        stateHolder.closeArchiveView()
-        assertTrue(stateHolder.state.gridEntries.archives().isNotEmpty(), "收起包后回到目录层")
+        // 压缩包不再是"可打开的条目"：包内图直接和目录图并排摊在同一张网格里，
+        // 所以这里没有任何"打开/收起压缩包"的动作，只断言包内图确实进了网格
+        assertTrue(stateHolder.state.archiveImages.isNotEmpty(), "当前目录的包内图应已就绪")
+        val pictureNames = stateHolder.state.gridEntries.pictures().map { entry -> entry.item.name }
+        assertTrue(pictureNames.contains("a.png"), "包内图应出现在网格里，实际：$pictureNames")
     }
 
     @Test

@@ -56,19 +56,10 @@ fun HomeScreen(
     onLoadMore: () -> Unit,
     onRetry: () -> Unit,
     onOpenSettings: () -> Unit,
-    // 目录层级导航：进子文件夹 / 返回上级 / 面包屑跳回 / 展开压缩包
+    // 目录层级导航：进子文件夹 / 返回上级 / 面包屑跳回
     onEnterFolder: (String) -> Unit,
     onGoUp: () -> Unit,
     onJumpToCrumb: (Int) -> Unit,
-    onOpenArchive: (String) -> Unit,
-    onCloseArchiveView: () -> Unit,
-    // 压缩包动图动作（全部转给状态层，页面不做任何数据处理）
-    onComposeZipGif: (String) -> Unit,
-    onZipGifLoaded: (String, String) -> Unit,
-    onZipGifLoadFailed: (String, String) -> Unit,
-    onRetryZipGif: (String) -> Unit,
-    // 把包内条目名拼成可渲染图片模型（由状态层拼 URL，UI 不自己拼）
-    buildZipImages: (ArchiveEntry) -> List<ImageItem>,
     modifier: Modifier = Modifier,
     // 侧栏拖动由 AppRoot 构造后传进来，挂到网格区（避免抢顶部 chip 条的横向滚动）
     gridGestureModifier: Modifier = Modifier,
@@ -88,7 +79,7 @@ fun HomeScreen(
         )
         CategoryChipsRow(state = state, onSelectFilter = onSelectFilter)
 
-        // 目录层级：面包屑 + 包内动图。只在分类视图出现（收藏/游客没有层级概念）
+        // 目录层级：面包屑。只在分类视图出现（收藏/游客没有层级概念）
         if (state.isCategoryFilter) {
             if (state.breadcrumbs.isNotEmpty()) {
                 BreadcrumbBar(
@@ -96,19 +87,6 @@ fun HomeScreen(
                     canGoUp = state.canGoUp,
                     onGoUp = onGoUp,
                     onCrumbClick = onJumpToCrumb,
-                )
-            }
-            // 包内命中序列帧时，用动图卡替代平铺图片（合成在服务端）
-            val openedArchive = state.openedArchive
-            if (openedArchive != null && state.canSynthGif(openedArchive)) {
-                ArchiveGifBanner(
-                    entry = openedArchive,
-                    gifState = state.gifStateOf(openedArchive),
-                    onCompose = onComposeZipGif,
-                    onLoaded = onZipGifLoaded,
-                    onLoadFailed = onZipGifLoadFailed,
-                    onRetry = onRetryZipGif,
-                    modifier = Modifier.padding(horizontal = AppTheme.metrics.spacingLg),
                 )
             }
         }
@@ -124,13 +102,6 @@ fun HomeScreen(
                 onEnterFolder = onEnterFolder,
                 onGoUp = onGoUp,
                 onJumpToCrumb = onJumpToCrumb,
-                onOpenArchive = onOpenArchive,
-                onCloseArchiveView = onCloseArchiveView,
-                onComposeZipGif = onComposeZipGif,
-                onZipGifLoaded = onZipGifLoaded,
-                onZipGifLoadFailed = onZipGifLoadFailed,
-                onRetryZipGif = onRetryZipGif,
-                buildZipImages = buildZipImages,
             )
         }
 
@@ -259,13 +230,6 @@ private fun HomeContent(
     onEnterFolder: (String) -> Unit,
     onGoUp: () -> Unit,
     onJumpToCrumb: (Int) -> Unit,
-    onOpenArchive: (String) -> Unit,
-    onCloseArchiveView: () -> Unit,
-    onComposeZipGif: (String) -> Unit,
-    onZipGifLoaded: (String, String) -> Unit,
-    onZipGifLoadFailed: (String, String) -> Unit,
-    onRetryZipGif: (String) -> Unit,
-    buildZipImages: (ArchiveEntry) -> List<ImageItem>,
 ) {
     val categoryError = state.categoryError
     val pageError = state.pageError
@@ -306,12 +270,6 @@ private fun HomeContent(
             onTogglePictureExpand = onTogglePictureExpand,
             onLoadMore = onLoadMore,
             onEnterFolder = onEnterFolder,
-            onOpenArchive = onOpenArchive,
-            onComposeZipGif = onComposeZipGif,
-            onZipGifLoaded = onZipGifLoaded,
-            onZipGifLoadFailed = onZipGifLoadFailed,
-            onRetryZipGif = onRetryZipGif,
-            buildZipImages = buildZipImages,
         )
     }
 }
@@ -323,12 +281,6 @@ private fun ImageGrid(
     onTogglePictureExpand: (String) -> Unit,
     onLoadMore: () -> Unit,
     onEnterFolder: (String) -> Unit,
-    onOpenArchive: (String) -> Unit,
-    onComposeZipGif: (String) -> Unit,
-    onZipGifLoaded: (String, String) -> Unit,
-    onZipGifLoadFailed: (String, String) -> Unit,
-    onRetryZipGif: (String) -> Unit,
-    buildZipImages: (ArchiveEntry) -> List<ImageItem>,
 ) {
     val metrics = AppTheme.metrics
 
@@ -372,13 +324,6 @@ private fun ImageGrid(
                     name = entry.name,
                     count = entry.count,
                     onClick = { onEnterFolder(entry.name) },
-                )
-
-
-                is GridEntry.Archive -> ArchiveCard(
-                    name = entry.name,
-                    imageCount = entry.imageCount,
-                    onClick = { onOpenArchive(entry.path) },
                 )
             }
         }

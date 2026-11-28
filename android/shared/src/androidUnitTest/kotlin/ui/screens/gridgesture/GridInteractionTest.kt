@@ -207,18 +207,6 @@ class GridInteractionTest {
     }
 
     @Test
-    fun openingArchiveClearsExpanded() = runBlocking {
-        val stateHolder = holder()
-        stateHolder.bootstrap()
-        stateHolder.toggleEntryExpanded(stateHolder.keyOf("a.png"))
-        val archivePath = stateHolder.state.archives.first().path
-
-        stateHolder.openArchive(archivePath)
-
-        assertNull(stateHolder.state.expandedEntryKey, "进出压缩包也是换内容，要清空")
-    }
-
-    @Test
     fun longPressPathDoesNotToggleExpanded() = runBlocking {
         val stateHolder = holder()
         stateHolder.bootstrap()

@@ -30,19 +30,13 @@ private const val ENDPOINT_UPLOADED = "/uploaded"
 private const val ENDPOINT_DIR = "/dir"
 private const val ENDPOINT_ZIP_SCAN = "/zip/scan"
 private const val ENDPOINT_ZIP_IMG = "/zip/img"
-private const val ENDPOINT_GIF = "/gif"
-private const val ENDPOINT_ZIP_GIF = "/zip/gif"
 
 
-// 压缩包/序列帧的参数名。注意这批接口**参数名不统一**（服务端实现就是这样）：
-// zip/scan 与 gif 用 dir，zip/img 与 zip/gif 用 path；写错后端只会回 400，不会报"参数名错了"。
+// 压缩包参数名。注意这批接口**参数名不统一**（服务端实现就是这样）：
+// zip/scan 用 dir，zip/img 用 path + file；写错后端只会回 400，不会报"参数名错了"。
 private const val QUERY_DIR = "dir"
 private const val QUERY_PATH = "path"
 private const val QUERY_FILE = "file"
-private const val QUERY_DUR_MS = "dur_ms"
-private const val QUERY_FPS = "fps"
-
-// GIF 的默认帧率与"自动帧间隔"哨兵值放在 ArchiveModels.kt，客户端各处共用一份
 
 // 收藏写操作的请求体字段名（与后端 readJsonBody 后取的键逐字一致）
 private const val BODY_SRC = "src"
@@ -300,64 +294,15 @@ class ApiClient(
      * 包内单张图片的绝对 URL（服务端已按 flip-rule 决定要不要 180° 翻转）。
      *
      * 条目名在这里做 RFC 3986 编码：包里常有中文、空格、`#`、`&`，不编码会被服务端当成别的条目。
-     * 含 `..` 的条目名返回空串（服务端会拒；客户端不把必然失败的图塞进网格）。
-     */
-    fun zipImageUrl(zipPath: String, entryName: String): String {
-        if (!ArchiveHeuristics.isSafeEntryName(entryName)) return ""
-        return UrlBuilder.build(
-            baseUrl + API_PREFIX + ENDPOINT_ZIP_IMG,
-            mapOf(QUERY_PATH to zipPath, QUERY_FILE to entryName),
-        )
-    }
-
-    /** 目录序列帧 → GIF 的绝对 URL。帧间隔交给服务端算（dur_ms=0）。 */
-    fun directoryGifUrl(dir: String, durationMs: Int = GIF_AUTO_DURATION_MS): String =
-        UrlBuilder.build(
-            baseUrl + API_PREFIX + ENDPOINT_GIF,
-            mapOf(QUERY_DIR to dir, QUERY_DUR_MS to durationMs.toString()),
-        )
-
-    /**
-     * 包内序列帧 → GIF 的绝对 URL。
      *
-     * fps 只有"用 ini 的 $speed 换算帧间隔"时服务端才用；这里显式传默认值，
-     * 让请求参数自解释（客户端不做任何换算）。
+     * 为什么**不**在客户端校验条目名（比如含 `..` 就拒绝）：路径穿越防护是服务端的职责，
+     * `server/routes/archive.js` 对含 `..` 的 file 直接回 400。客户端再判一遍等于同一规则两份实现，
+     * 判得比服务端严就会"服务端能给的客户端拒了"，判松则白拦。这里只管编码，异常交给服务端回答。
      */
-    fun zipGifUrl(
-        zipPath: String,
-        durationMs: Int = GIF_AUTO_DURATION_MS,
-        fps: Int = DEFAULT_GIF_FPS,
-    ): String = UrlBuilder.build(
-        baseUrl + API_PREFIX + ENDPOINT_ZIP_GIF,
-        mapOf(
-            QUERY_PATH to zipPath,
-            QUERY_DUR_MS to durationMs.toString(),
-            QUERY_FPS to fps.toString(),
-        ),
+    fun zipImageUrl(zipPath: String, entryName: String): String = UrlBuilder.build(
+        baseUrl + API_PREFIX + ENDPOINT_ZIP_IMG,
+        mapOf(QUERY_PATH to zipPath, QUERY_FILE to entryName),
     )
-
-    /**
-     * 取一次二进制 URL 的失败说明（只在失败时调用）。
-     *
-     * 为什么需要它：GIF 是交给图片加载器按 URL 拉的，加载失败时只知道"失败了"，
-     * 拿不到服务端 400 里那句中文（如「目录无效」）。失败后用同一个 URL 再问一次，
-     * 服务端回 400 是**不编码 GIF** 的（快速失败），所以这次请求很便宜。
-     *
-     * @return 可直接上屏的中文说明；拿不到就回退成服务端原文或空串
-     */
-    suspend fun fetchFailureText(url: String): String {
-        val response = try {
-            transport.getBytes(url, emptyMap(), requestTimeoutMs)
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (failure: Throwable) {
-            return describeFailure(failure)
-        }
-        val bodyText = response.bytes.toString(Charsets.UTF_8).trim()
-        // 400 的 body 有两种：JSON {ok:false,error:"目录无效"} 或纯文本 "bad request"
-        val fromJson = runCatching { extractServerError(JSONObject(bodyText)) }.getOrDefault("")
-        return fromJson.ifBlank { bodyText }
-    }
 
     /** GET /api/uploaded —— 游客可看；同样是裸数组。 */
     suspend fun fetchUploaded(): ApiResult<List<UploadedEntry>> =

@@ -15,7 +15,6 @@ import kotlinx.coroutines.launch
 import com.eightfs.lumigather.data.ApiClient
 import com.eightfs.lumigather.data.ApiError
 import com.eightfs.lumigather.data.ArchiveEntry
-import com.eightfs.lumigather.data.ArchiveHeuristics
 import com.eightfs.lumigather.data.AppUpdateClient
 import com.eightfs.lumigather.data.AppUpdatePlatform
 import com.eightfs.lumigather.data.AuthTokenStore
@@ -100,14 +99,16 @@ sealed interface ContentFilter {
  * 与渲染侧的一个 when，而不是在十几处判断"这一项是不是目录"。
  */
 sealed interface GridEntry {
-    /** 一张图：本层直接含的图 / 叶子目录摊开的图 / 压缩包里的图，UI 不需要区分来源。 */
+    /**
+     * 一张图：本层直接含的图 / 叶子目录摊开的图 / **压缩包里的图**，UI 不需要区分来源。
+     *
+     * 压缩包不做成单独的条目类型：包内图与目录图在服务端都是"一张图片地址"
+     * （`/api/zip/img?path=&file=`），客户端没有任何理由把它们分开渲染。
+     */
     data class Picture(val item: ImageItem) : GridEntry
 
     /** 一个还有子目录的文件夹（count < 0 表示张数未知，界面显示「目录」）。 */
     data class Folder(val name: String, val path: String, val count: Int) : GridEntry
-
-    /** 一个含图的压缩包（空包不产出）。 */
-    data class Archive(val name: String, val path: String, val imageCount: Int) : GridEntry
 }
 
 /**
@@ -143,8 +144,8 @@ data class HomeUiState(
     val breadcrumbs: List<String> = emptyList(),
     // 能否返回上级（根目录为 false）。/api/dir 不返回 canUp，由栈深度决定
     val canGoUp: Boolean = false,
-    // 已展开的压缩包（null = 在目录层）。展开后网格内容变成包内图片
-    val openedArchive: ArchiveEntry? = null,
+    // 当前目录里所有压缩包的包内图片，已摊平成普通图片条目。
+    // 不做"打开压缩包"这层概念：/api/zip/scan 只扫当前层，包内图直接进网格即可
     val archiveImages: List<ImageItem> = emptyList(),
     // 当前放大的那张图。key = 图片的绝对地址（不是文件名）：叶子目录摊平后同一层
     // 可能出现同名文件，绝对地址才唯一；收藏/游客视图也天然有它，一套 key 通吃
@@ -196,11 +197,6 @@ data class HomeUiState(
     // 扫描失败的原因（独立字段，不占用那一行全局提示）：扫包是次要功能，
     // 它失败绝不能盖掉"登录已过期""下载失败"这类更重要、且与用户当前动作直接相关的提示
     val archiveScanError: String? = null,
-    // 已收起的包（按 path 记）。放在状态里而不是组件内：切分类再切回来要保留用户的折叠选择
-    val collapsedArchives: Set<String> = emptySet(),
-    // 每个包自己的 GIF 状态（key = 包 path）。包级而不是全局单值：
-    // 一个目录下可能同时有多个序列帧包，各自独立生成、独立失败
-    val zipGifStates: Map<String, GifState> = emptyMap(),
     // ---- 应用更新（与服务器无关：走 GitHub Releases，未登录也能查）----
     // 失败/需授权都在这一个字段里，刻意不写 actionHint：检查更新是次要动作，
     // 它的失败不能盖掉「登录已过期」这类与用户当前操作直接相关的提示
@@ -257,21 +253,17 @@ data class HomeUiState(
     /**
      * 网格内容：**唯一的网格数据出口**。
      *
-     * 分类视图 = 本层条目（图/文件夹）+ 含图压缩包；展开了某个包 = 包内图片；
-     * 收藏/游客视图 = 一堆图片。三处都产出 [GridEntry.Picture]，所以渲染侧完全不知道
-     * 内容来自哪里 —— 这就是"新增文件夹不牵动 UI"的落点。
+     * 分类视图 = 本层条目（图/文件夹）+ 压缩包包内图；收藏/游客视图 = 一堆图片。
+     * 三处都产出 [GridEntry.Picture]，所以渲染侧完全不知道内容来自哪里 ——
+     * 这就是"新增内容来源不牵动 UI"的落点。
+     *
+     * 压缩包没有单独的条目类型：包内图直接当普通图片摊进网格（服务端 /api/zip/img 逐张给图），
+     * 不做"打开压缩包"这层概念，也不在客户端判断"该不该合成动图"。
      */
     val gridEntries: List<GridEntry>
         get() = when (filter) {
-            is ContentFilter.Category -> {
-                val opened = openedArchive
-                if (opened != null) {
-                    archiveImages.map { image -> GridEntry.Picture(image) }
-                } else {
-                    dirEntries + visibleArchives.map { entry ->
-                        GridEntry.Archive(entry.name, entry.path, entry.images.size)
-                    }
-                }
+            is ContentFilter.Category -> dirEntries + archiveImages.map { image ->
+                GridEntry.Picture(image)
             }
 
             ContentFilter.Favorites -> favoriteImages.map { image -> GridEntry.Picture(image) }
@@ -310,36 +302,17 @@ data class HomeUiState(
             return MediaSrc.normalize(image.relativeUrl) in favoriteSrcs
         }
 
-    // ---- 压缩包区块（当前目录内容的第二部分，挂在图片网格之后）----
+    // ---- 压缩包 ----
+    // 这里刻意不留任何"包级"的派生值：包内图已经在 state.archiveImages 里摊成普通图片，
+    // 渲染侧不需要知道哪张图来自哪个包，也不需要"该不该合成动图"的判断（那是服务端的规则）。
 
     /**
-     * 要渲染的包：只保留有图的（服务端可能给出只有 ini / 只有非图片条目的包，
-     * 那种包点开是空的，占着位置只会让人以为界面坏了）。
-     */
-    val visibleArchives: List<ArchiveEntry>
-        get() = archives.filter { it.images.isNotEmpty() }
-
-    /**
-     * 真·空目录判定：图片与压缩包都空才算空。
+     * 真·空目录判定：图片（含包内图）与文件夹都空才算空。
      *
-     * 分类下有包但没图（Pixiv 图包常见）时不能显示"这个分类还没有图片" —— 内容其实就在下面。
+     * 分类下只有压缩包时不能显示"这个分类还没有图片" —— 包内图会摊进网格，内容其实就在。
      */
     val isContentEmpty: Boolean
         get() = gridEntries.isEmpty()
-
-    /**
-     * 这个包是否值得合成动图（决定包内显示"GIF 卡"还是"平铺图片"）。
-     *
-     * 判据只是"条目名像不像序列帧"，真正能不能合成由服务端决定；
-     * 判错最多是显示了一张会失败的卡，不会给出错误结果。
-     */
-    fun canSynthGif(entry: ArchiveEntry): Boolean =
-        ArchiveHeuristics.looksLikeSequence(entry.images)
-
-    // 某个包的折叠态与 GIF 状态（按包 path 索引，互不影响）
-    fun isArchiveCollapsed(entry: ArchiveEntry): Boolean = entry.path in collapsedArchives
-
-    fun gifStateOf(entry: ArchiveEntry): GifState = zipGifStates[entry.path] ?: GifState.Idle
 
     // 当前这张图是否正在增删（按钮禁用 + 文案改"处理中"）
     val isFavoriteMutating: Boolean
@@ -726,16 +699,6 @@ class HomeStateHolder(
         loadLayerAndArchives(targetPath) { browse.jumpTo(index) }
     }
 
-    /** 展开某个压缩包（网格切成包内图片；返回上级回到目录层）。 */
-    fun openArchive(path: String) {
-        archive.openArchive(path)
-    }
-
-    /** 从包内视图回到目录层。 */
-    fun closeArchiveView() {
-        archive.closeArchive()
-    }
-
     private suspend fun loadLayerAndArchives(targetRelativePath: String, loadLayer: suspend () -> Unit) {
         // 换层必须先清放大态：新目录里那张图根本不存在，留着会"刚进目录就有一张莫名放大"
         clearExpandedEntry()
@@ -753,36 +716,9 @@ class HomeStateHolder(
         return if (relativePath.isEmpty()) root else "$root/$relativePath"
     }
 
-    // ---- 压缩包 / 序列帧：全部转发给压缩包子状态机 ----
-
-    /** 折叠/展开某个包（收起状态留在状态里，切分类回来还保留）。 */
-    fun toggleArchiveCollapsed(zipPath: String) {
-        archive.toggleCollapsed(zipPath)
-    }
-
-    /**
-     * 请求合成某个包的 GIF。生成中重复调用会被忽略（防连点、防自动触发重复发请求）。
-     */
-    fun requestZipGif(zipPath: String) {
-        archive.requestGif(zipPath)
-    }
-
-    // 图片加载成功/失败回调：GIF 是"按 URL 加载"的，只有图片层知道完成没完成
-    fun onZipGifLoaded(zipPath: String, url: String) {
-        archive.onGifLoaded(zipPath, url)
-    }
-
-    suspend fun onZipGifLoadFailed(zipPath: String, url: String) {
-        archive.onGifLoadFailed(zipPath, url)
-    }
-
-    /** 丢弃某个包的 GIF（失败重试 / 换包时复位）。 */
-    fun resetZipGif(zipPath: String) {
-        archive.resetGif(zipPath)
-    }
-
-    /** 把某个包内的条目名拼成可加载的图片模型（UI 直接用，不自己拼 URL）。 */
-    fun zipImagesOf(entry: ArchiveEntry): List<ImageItem> = archive.zipImagesOf(entry)
+    // ---- 压缩包 ----
+    // 对外只暴露"扫一遍当前目录的包"，没有打开/折叠/合成这些概念：
+    // 包内图由归档子状态机扫完直接摊成普通图片写进 archiveImages。
 
     // ---- 登录底座：全部委托给登录子状态机 ----
 

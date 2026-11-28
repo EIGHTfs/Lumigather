@@ -164,7 +164,6 @@ class BrowseController(
                 dirEntries = emptyList(),
                 breadcrumbs = emptyList(),
                 canGoUp = false,
-                openedArchive = null,
                 archiveImages = emptyList(),
                 expandedEntryKey = null,
                 filter = ContentFilter.Category(""),
@@ -215,9 +214,8 @@ class BrowseController(
                 isLoadingPage = true,
                 isLoadingMore = false,
                 pageError = null,
-                // 换层：上一层的条目与已展开的包都作废
+                // 换层：上一层的条目与包内图都作废（包内图由归档子状态机随新目录重扫）
                 dirEntries = emptyList(),
-                openedArchive = null,
                 archiveImages = emptyList(),
                 hasMore = false,
             )
