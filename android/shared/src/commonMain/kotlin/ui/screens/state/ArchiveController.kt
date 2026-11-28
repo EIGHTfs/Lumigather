@@ -74,6 +74,29 @@ class ArchiveController(
         }
     }
 
+    /**
+     * 展开某个压缩包：网格内容切成包内图片。
+     *
+     * 包内图片在这里一次算好存进状态（而不是让 UI 每次重组去拼 URL）：
+     * 拼接含 RFC 3986 编码与 `..` 过滤，属数据决策，不该散到渲染层。
+     */
+    fun openArchive(path: String) {
+        val entry = channel.state.archives.firstOrNull { archive -> archive.path == path } ?: return
+        channel.mutate {
+            it.copy(
+                openedArchive = entry,
+                archiveImages = zipImagesOf(entry),
+                // 展开包 = 进入下一层，返回上级要能回到目录层
+                canGoUp = true,
+            )
+        }
+    }
+
+    /** 收起当前包，回到目录层。 */
+    fun closeArchive() {
+        channel.mutate { it.copy(openedArchive = null, archiveImages = emptyList()) }
+    }
+
     /** 折叠/展开某个包。收起状态留在状态里，切分类回来仍然保留。 */
     fun toggleCollapsed(zipPath: String) {
         channel.mutate {

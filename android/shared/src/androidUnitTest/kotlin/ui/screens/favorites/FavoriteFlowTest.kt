@@ -21,6 +21,7 @@ import ui.screens.download.ImageDownloader
 import ui.screens.settings.ServerAddressStore
 import ui.screens.state.HomeStateHolder
 import ui.screens.state.ContentFilter
+import ui.screens.state.GridEntry
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -43,6 +44,14 @@ private const val SITE_CONFIG_JSON = """
 {"title":"拾光集","fsRoot":"/root","imagesPerRow":20,
  "categories":[{"name":"$SAMPLE_CATEGORY_NAME","label":"$SAMPLE_CATEGORY_NAME","color":"#c084fc"}],
  "directories":[{"path":"$SAMPLE_ROOT_PATH","category":"$SAMPLE_CATEGORY_NAME"}]}
+"""
+
+// /api/dir 的响应：本层一张图、无子目录（结构照实测抓的那份）
+private const val DIR_JSON = """
+{"root":"$SAMPLE_ROOT_PATH","path":"","sig":1706502123893.9,
+ "subdirs":[],
+ "images":[{"name":"a.png","path":"$SAMPLE_ROOT_PATH/a.png","url":"/api/media?file=%2Fa.png",
+            "size":"1.0 KB","modified":"2023-08-18T06:56:03.097Z"}]}
 """
 
 private const val IMAGES_JSON = """
@@ -109,9 +118,9 @@ private class FavoritesTransport(
     override suspend fun get(url: String, query: Map<String, String>, timeoutMs: Long): HttpRawResponse =
         when {
             url.endsWith("/api/lumigather") -> HttpRawResponse(200, SITE_CONFIG_JSON, "application/json")
-            url.endsWith("/api/images") -> {
+            url.endsWith("/api/dir") -> {
                 imagesGetCount += 1
-                HttpRawResponse(200, IMAGES_JSON, "application/json")
+                HttpRawResponse(200, DIR_JSON, "application/json")
             }
             url.endsWith("/api/status") -> HttpRawResponse(200, STATUS_JSON, "application/json")
             // 注意：这两个返回的是裸数组，正是要验的契约
@@ -154,6 +163,10 @@ private class FavoritesTransport(
         return HttpRawResponse(200, deleteResponse, "application/json")
     }
 }
+
+// 网格现在是同质条目：取第一张图的名字要显式解包（这本身就是"UI 不知道来源"的证明）
+private fun picName(stateHolder: HomeStateHolder): String =
+    (stateHolder.state.gridEntries.first() as GridEntry.Picture).item.name
 
 private fun holder(
     transport: HttpTransport,
@@ -304,17 +317,17 @@ class FavoriteFlowTest {
 
         stateHolder.selectFilter(ContentFilter.Favorites)
         assertEquals(ContentFilter.Favorites, stateHolder.state.filter)
-        assertEquals(1, stateHolder.state.gridImages.size, "收藏视图的网格应来自收藏列表")
+        assertEquals(1, stateHolder.state.gridEntries.size, "收藏视图的网格应来自收藏列表")
         assertEquals("收藏 · 1", stateHolder.state.contentSubtitle)
 
         stateHolder.selectFilter(ContentFilter.Guest)
         assertEquals(ContentFilter.Guest, stateHolder.state.filter)
-        assertEquals(1, stateHolder.state.gridImages.size, "游客视图的网格应来自上传列表")
+        assertEquals(1, stateHolder.state.gridEntries.size, "游客视图的网格应来自上传列表")
 
         stateHolder.selectFilter(ContentFilter.Category(SAMPLE_CATEGORY_NAME))
         assertEquals(ContentFilter.Category(SAMPLE_CATEGORY_NAME), stateHolder.state.filter)
         assertEquals(SAMPLE_CATEGORY_NAME, stateHolder.state.currentCategoryName, "切回分类应保留原分类")
-        assertEquals(1, stateHolder.state.gridImages.size)
+        assertEquals(1, stateHolder.state.gridEntries.size)
     }
 
     @Test
@@ -381,7 +394,7 @@ class FavoriteFlowTest {
         stateHolder.bootstrap()
         stateHolder.selectFilter(ContentFilter.Favorites)
         assertEquals(ContentFilter.Favorites, stateHolder.state.filter)
-        assertEquals("fav-only.png", stateHolder.state.gridImages.single().name, "前提：此时网格是收藏列表")
+        assertEquals("fav-only.png", picName(stateHolder), "前提：此时网格是收藏列表")
 
         // 点分类
         stateHolder.selectFilter(ContentFilter.Category(SAMPLE_CATEGORY_NAME))
@@ -393,7 +406,7 @@ class FavoriteFlowTest {
         )
         assertEquals(
             "a.png",
-            stateHolder.state.gridImages.single().name,
+            stateHolder.state.gridEntries.single().let { (it as GridEntry.Picture).item.name },
             "网格数据源必须切到分类图片（而不是还挂着收藏项）",
         )
         assertEquals(SAMPLE_CATEGORY_NAME, stateHolder.state.currentCategoryName)

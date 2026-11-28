@@ -93,6 +93,24 @@ sealed interface ContentFilter {
 }
 
 /**
+ * 网格里的一个条目：图 / 文件夹 / 压缩包。
+ *
+ * 为什么要这层抽象：网格内容的消费方（渲染、空态判断、点当前项判重）只关心"有多少条目"，
+ * 不关心它是图还是目录还是包。抽成同质条目后，新增"文件夹"和"压缩包"只改产出侧（状态层）
+ * 与渲染侧的一个 when，而不是在十几处判断"这一项是不是目录"。
+ */
+sealed interface GridEntry {
+    /** 一张图：本层直接含的图 / 叶子目录摊开的图 / 压缩包里的图，UI 不需要区分来源。 */
+    data class Picture(val item: ImageItem) : GridEntry
+
+    /** 一个还有子目录的文件夹（count < 0 表示张数未知，界面显示「目录」）。 */
+    data class Folder(val name: String, val path: String, val count: Int) : GridEntry
+
+    /** 一个含图的压缩包（空包不产出）。 */
+    data class Archive(val name: String, val path: String, val imageCount: Int) : GridEntry
+}
+
+/**
  * 整屏的完整状态。任何时刻界面都是它的一个纯函数。
  *
  * 三个错误字段刻意分开（[categoryError] / [pageError] / 分类项里的 countState）：
@@ -117,6 +135,17 @@ data class HomeUiState(
     val loadedCount: Int = 0,
     val totalCount: Int = 0,
     val hasMore: Boolean = false,
+    // ---- 文件夹层级浏览 ----
+    // 当前这一层由 /api/dir 产出的条目（图 + 子目录）。**目录栈不在这里**：
+    // 栈只在浏览子状态机内部，界面只拿到渲染所需的条目与面包屑文本
+    val dirEntries: List<GridEntry> = emptyList(),
+    // 面包屑：第一段恒为分类名，之后每段对应一层目录。点第 i 段 = 跳回第 i 层
+    val breadcrumbs: List<String> = emptyList(),
+    // 能否返回上级（根目录为 false）。/api/dir 不返回 canUp，由栈深度决定
+    val canGoUp: Boolean = false,
+    // 已展开的压缩包（null = 在目录层）。展开后网格内容变成包内图片
+    val openedArchive: ArchiveEntry? = null,
+    val archiveImages: List<ImageItem> = emptyList(),
     val leftSidebarOpen: Boolean = false,
     val rightSidebarOpen: Boolean = false,
     val selectedImage: ImageItem? = null,
@@ -222,12 +251,28 @@ data class HomeUiState(
 
     // ---- 三视图的唯一出口：页面只读这几个派生值，不再自己判断 view ----
 
-    // 网格数据：分类图 / 收藏 / 游客上传
-    val gridImages: List<ImageItem>
+    /**
+     * 网格内容：**唯一的网格数据出口**。
+     *
+     * 分类视图 = 本层条目（图/文件夹）+ 含图压缩包；展开了某个包 = 包内图片；
+     * 收藏/游客视图 = 一堆图片。三处都产出 [GridEntry.Picture]，所以渲染侧完全不知道
+     * 内容来自哪里 —— 这就是"新增文件夹不牵动 UI"的落点。
+     */
+    val gridEntries: List<GridEntry>
         get() = when (filter) {
-            is ContentFilter.Category -> images
-            ContentFilter.Favorites -> favoriteImages
-            ContentFilter.Guest -> guestImages
+            is ContentFilter.Category -> {
+                val opened = openedArchive
+                if (opened != null) {
+                    archiveImages.map { image -> GridEntry.Picture(image) }
+                } else {
+                    dirEntries + visibleArchives.map { entry ->
+                        GridEntry.Archive(entry.name, entry.path, entry.images.size)
+                    }
+                }
+            }
+
+            ContentFilter.Favorites -> favoriteImages.map { image -> GridEntry.Picture(image) }
+            ContentFilter.Guest -> guestImages.map { image -> GridEntry.Picture(image) }
         }
 
     val gridLoading: Boolean
@@ -274,7 +319,7 @@ data class HomeUiState(
      * 分类下有包但没图（Pixiv 图包常见）时不能显示"这个分类还没有图片" —— 内容其实就在下面。
      */
     val isContentEmpty: Boolean
-        get() = gridImages.isEmpty() && visibleArchives.isEmpty()
+        get() = gridEntries.isEmpty()
 
     /**
      * 这个包是否值得合成动图（决定包内显示"GIF 卡"还是"平铺图片"）。
@@ -513,7 +558,7 @@ class HomeStateHolder(
      */
     suspend fun selectFilter(target: ContentFilter) {
         // 判据：点的就是当前筛选，且这份数据已经有内容 → 只收左栏
-        if (target == state.filter && state.gridImages.isNotEmpty()) {
+        if (target == state.filter && state.gridEntries.isNotEmpty()) {
             sidebar.closeLeftSidebar()
             return
         }
@@ -624,6 +669,60 @@ class HomeStateHolder(
     /** 丢弃更新区状态（换服务器/重置时用；下载中的任务由调用方取消）。 */
     fun resetUpdate() {
         updateController.reset()
+    }
+
+    // ---- 文件夹层级导航 ----
+    //
+    // 目录栈在浏览子状态机内部，这里只按"目标层级"编排两件事：加载该层目录内容、
+    // 并行扫该层的压缩包。两者互不依赖，串行会让用户多点一次等两个 RTT。
+
+    /** 进子文件夹。 */
+    suspend fun enterFolder(name: String) {
+        val targetPath = (state.breadcrumbs.drop(1) + name).joinToString("/")
+        loadLayerAndArchives(targetPath) { browse.enterFolder(name) }
+    }
+
+    /** 返回上级（根目录时无操作）。 */
+    suspend fun goUp() {
+        val parentSegments = state.breadcrumbs.drop(1).dropLast(1)
+        val targetPath = parentSegments.joinToString("/")
+        loadLayerAndArchives(targetPath) { browse.goUp() }
+    }
+
+    /**
+     * 跳回面包屑第 index 段（0 = 分类根）。
+     *
+     * 段号与 pathStack 深度一一对应：面包屑 = [分类名] + 栈，所以 index 就是目标深度。
+     */
+    suspend fun jumpToCrumb(index: Int) {
+        val segments = state.breadcrumbs.drop(1)
+        val targetPath = segments.take(index.coerceIn(0, segments.size)).joinToString("/")
+        loadLayerAndArchives(targetPath) { browse.jumpTo(index) }
+    }
+
+    /** 展开某个压缩包（网格切成包内图片；返回上级回到目录层）。 */
+    fun openArchive(path: String) {
+        archive.openArchive(path)
+    }
+
+    /** 从包内视图回到目录层。 */
+    fun closeArchiveView() {
+        archive.closeArchive()
+    }
+
+    private suspend fun loadLayerAndArchives(targetRelativePath: String, loadLayer: suspend () -> Unit) {
+        val absoluteDir = absDirPath(targetRelativePath)
+        coroutineScope {
+            launch { loadLayer() }
+            launch { archive.loadArchives(absoluteDir) }
+        }
+    }
+
+    // 相对路径 → 绝对路径（分类根来自当前分类；根目录就是分类根本身）
+    private fun absDirPath(relativePath: String): String {
+        val root = state.selectedCategoryView?.rootPath.orEmpty()
+        if (root.isEmpty()) return ""
+        return if (relativePath.isEmpty()) root else "$root/$relativePath"
     }
 
     // ---- 压缩包 / 序列帧：全部转发给压缩包子状态机 ----

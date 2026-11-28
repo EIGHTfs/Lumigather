@@ -12,6 +12,7 @@
 package ui.screens.state
 
 import com.eightfs.lumigather.data.ApiResult
+import com.eightfs.lumigather.data.DirPage
 import com.eightfs.lumigather.data.DEFAULT_COUNT_CONCURRENCY
 import com.eightfs.lumigather.data.DEFAULT_PAGE_SIZE
 import com.eightfs.lumigather.data.LumigatherRepository
@@ -24,6 +25,14 @@ class BrowseController(
     private val onServerNeedsSetup: (needsSetup: Boolean) -> Unit,
     private val onServerReady: () -> Unit,
 ) {
+
+    /**
+     * 目录栈：只在本类内部存在，**不暴露给 UI**。
+     *
+     * 界面需要的信息只有两样：面包屑文本、能不能返回上级 —— 这两个由 [publishBreadcrumbs] 写进状态。
+     * 把栈本身放进状态会让页面有能力"改栈"，那正是层级导航最容易出 bug 的地方（栈与显示不同步）。
+     */
+    private val pathStack: MutableList<String> = mutableListOf()
 
     /**
      * 主链路：服务端状态 → 分类列表 → 第一个分类的第一页 → 后台补各分类张数。
@@ -56,7 +65,7 @@ class BrowseController(
                 // 能拉到分类说明这台服务器可用：让设置态知道"现在有地址可退回了"
                 onServerReady()
                 if (firstCategory == null) return
-                loadFirstPage(firstCategory.name)
+                loadCategory(firstCategory.name)
                 fillCategoryCounts(categories.map { it.name })
             }
         }
@@ -70,8 +79,42 @@ class BrowseController(
      * 那不是靠这里补一句 `filter = ...` 解决的，而是靠"不允许第二个地方写它"。
      */
     suspend fun loadCategory(categoryName: String) {
-        loadFirstPage(categoryName)
+        // 切分类 = 回到该分类根目录：栈必须清空，否则会带着上一个分类的层级
+        pathStack.clear()
+        loadCurrentDir(categoryName)
     }
+
+    /** 进入子文件夹（name 是目录名，层级由栈累积成相对路径）。 */
+    suspend fun enterFolder(name: String) {
+        val categoryName = channel.state.currentCategoryName ?: return
+        pathStack.add(name)
+        loadCurrentDir(categoryName)
+    }
+
+    /** 返回上级：栈空时什么都不做（根目录没有上级）。 */
+    suspend fun goUp() {
+        val categoryName = channel.state.currentCategoryName ?: return
+        if (pathStack.isEmpty()) return
+        pathStack.removeAt(pathStack.lastIndex)
+        loadCurrentDir(categoryName)
+    }
+
+    /**
+     * 跳回面包屑第 index 段（0 = 分类根）。
+     *
+     * 语义是"截断"而不是"再进一次"：从 A/B/C 点 A 段应得到 A，而不是把 A 压到 C 后面。
+     */
+    suspend fun jumpTo(index: Int) {
+        val categoryName = channel.state.currentCategoryName ?: return
+        val targetDepth = index.coerceAtLeast(0)
+        while (pathStack.size > targetDepth) {
+            pathStack.removeAt(pathStack.lastIndex)
+        }
+        loadCurrentDir(categoryName)
+    }
+
+    /** 当前层相对分类根的路径（""=根），给 facade 拼压缩包扫描的绝对路径用。 */
+    fun currentRelativePath(): String = pathStack.joinToString("/")
 
     /** 触底加载下一页。 */
     suspend fun loadMore() {
@@ -103,7 +146,7 @@ class BrowseController(
             refreshContent()
             return
         }
-        loadFirstPage(categoryName)
+        loadCurrentDir(categoryName)
     }
 
     /**
@@ -113,10 +156,16 @@ class BrowseController(
      * 立刻回到"正在读取分类"的加载态，而不是闪一下旧数据的空壳。
      */
     fun resetContent() {
+        pathStack.clear()
         channel.mutate {
             it.copy(
                 categories = emptyList(),
                 images = emptyList(),
+                dirEntries = emptyList(),
+                breadcrumbs = emptyList(),
+                canGoUp = false,
+                openedArchive = null,
+                archiveImages = emptyList(),
                 filter = ContentFilter.Category(""),
                 categoryError = null,
                 pageError = null,
@@ -149,27 +198,53 @@ class BrowseController(
         }
     }
 
-    private suspend fun loadFirstPage(categoryName: String) {
+    /**
+     * 加载当前这一层（走 `/api/dir`，不是 `/api/images`）。
+     *
+     * 为什么换接口：/api/images 只回图片，拿不到"这一层有哪些子目录、各有多少张、是不是空"，
+     * 而层级浏览全靠这三件事。/api/dir 一次给全，且不分页（服务端按层返回本层全部图片）。
+     */
+    private suspend fun loadCurrentDir(categoryName: String) {
         val activeRepository = repositoryProvider() ?: return
+        val rootPath = channel.state.categories.firstOrNull { it.name == categoryName }?.rootPath.orEmpty()
+        val relativePath = currentRelativePath()
+
         channel.mutate {
             it.copy(
                 isLoadingPage = true,
                 isLoadingMore = false,
                 pageError = null,
-                images = emptyList(),
-                loadedCount = 0,
-                totalCount = 0,
+                // 换层：上一层的条目与已展开的包都作废
+                dirEntries = emptyList(),
+                openedArchive = null,
+                archiveImages = emptyList(),
                 hasMore = false,
             )
         }
-        when (val result = activeRepository.loadPageForCategory(
-            categoryName = categoryName,
-            offset = 0,
-            limit = DEFAULT_PAGE_SIZE,
-        )) {
-            is ApiResult.Ok -> applyPage(result.value, append = false)
-            is ApiResult.Err -> channel.mutate { it.copy(isLoadingPage = false, pageError = result.error) }
+        publishBreadcrumbs(categoryName)
+
+        when (val result = activeRepository.loadDir(rootPath, relativePath)) {
+            is ApiResult.Ok -> channel.mutate {
+                it.copy(
+                    dirEntries = mapDirToEntries(result.value),
+                    isLoadingPage = false,
+                    // dir 接口不分页：本层一次给全，所以不存在"还有更多"
+                    hasMore = false,
+                    loadedCount = result.value.images.size,
+                    totalCount = result.value.images.size,
+                )
+            }
+
+            is ApiResult.Err -> channel.mutate {
+                it.copy(isLoadingPage = false, pageError = result.error)
+            }
         }
+    }
+
+    // 面包屑 = 分类名 + 栈里每一层；能否上级 = 栈非空
+    private fun publishBreadcrumbs(categoryName: String) {
+        val crumbs = listOf(categoryName) + pathStack
+        channel.mutate { it.copy(breadcrumbs = crumbs, canGoUp = pathStack.isNotEmpty()) }
     }
 
     private fun applyPage(page: PagedImages, append: Boolean) {
@@ -206,4 +281,33 @@ class BrowseController(
             }
         }
     }
+}
+
+/**
+ * `/api/dir` 的一层 → 网格条目（三条渲染规则的唯一落点）。
+ *
+ * 规则（实测数据确认过）：
+ * 1. `hasSub = true` → 文件夹卡片。**不看 count**：count = -1 表示"未知"（后端递归缓存没覆盖时
+ *    单层扫描回落会这样给，实测 65 个目录全是 -1），把它当 0 会把有图目录直接吞掉
+ * 2. `hasSub = false` 且有 leafImages → 不画卡片，图片直接摊进网格（叶子目录不该再点一次）
+ * 3. `hasSub = false` 且没有图 → 不产出条目（真空目录不占位）
+ *
+ * images（本层直接含的图）排在子目录之后：先看到"还有哪些目录"，再看本层散图。
+ */
+internal fun mapDirToEntries(page: DirPage): List<GridEntry> {
+    val entries = ArrayList<GridEntry>(page.subdirs.size + page.images.size)
+    page.subdirs.forEach { subdir ->
+        when {
+            subdir.hasSub -> entries.add(
+                GridEntry.Folder(name = subdir.name, path = subdir.relPath, count = subdir.count),
+            )
+
+            subdir.leafImages.isNotEmpty() -> subdir.leafImages.forEach { image ->
+                entries.add(GridEntry.Picture(image))
+            }
+            // else：无子目录且无图 → 真空目录，不产出
+        }
+    }
+    page.images.forEach { image -> entries.add(GridEntry.Picture(image)) }
+    return entries
 }

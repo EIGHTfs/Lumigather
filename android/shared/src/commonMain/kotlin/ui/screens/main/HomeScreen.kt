@@ -41,7 +41,7 @@ import ui.components.AppError
 import ui.components.AppIconButton
 import ui.components.AppLoading
 import ui.screens.HomeLayout
-import ui.screens.archive.ZipSection
+import ui.screens.state.GridEntry
 import ui.screens.state.HomeUiState
 import ui.screens.state.ContentFilter
 
@@ -54,8 +54,13 @@ fun HomeScreen(
     onLoadMore: () -> Unit,
     onRetry: () -> Unit,
     onOpenSettings: () -> Unit,
-    // 压缩包区块动作（全部转给状态层，页面不做任何数据处理）
-    onToggleArchive: (String) -> Unit,
+    // 目录层级导航：进子文件夹 / 返回上级 / 面包屑跳回 / 展开压缩包
+    onEnterFolder: (String) -> Unit,
+    onGoUp: () -> Unit,
+    onJumpToCrumb: (Int) -> Unit,
+    onOpenArchive: (String) -> Unit,
+    onCloseArchiveView: () -> Unit,
+    // 压缩包动图动作（全部转给状态层，页面不做任何数据处理）
     onComposeZipGif: (String) -> Unit,
     onZipGifLoaded: (String, String) -> Unit,
     onZipGifLoadFailed: (String, String) -> Unit,
@@ -81,6 +86,31 @@ fun HomeScreen(
         )
         CategoryChipsRow(state = state, onSelectFilter = onSelectFilter)
 
+        // 目录层级：面包屑 + 包内动图。只在分类视图出现（收藏/游客没有层级概念）
+        if (state.isCategoryFilter) {
+            if (state.breadcrumbs.isNotEmpty()) {
+                BreadcrumbBar(
+                    crumbs = state.breadcrumbs,
+                    canGoUp = state.canGoUp,
+                    onGoUp = onGoUp,
+                    onCrumbClick = onJumpToCrumb,
+                )
+            }
+            // 包内命中序列帧时，用动图卡替代平铺图片（合成在服务端）
+            val openedArchive = state.openedArchive
+            if (openedArchive != null && state.canSynthGif(openedArchive)) {
+                ArchiveGifBanner(
+                    entry = openedArchive,
+                    gifState = state.gifStateOf(openedArchive),
+                    onCompose = onComposeZipGif,
+                    onLoaded = onZipGifLoaded,
+                    onLoadFailed = onZipGifLoadFailed,
+                    onRetry = onRetryZipGif,
+                    modifier = Modifier.padding(horizontal = AppTheme.metrics.spacingLg),
+                )
+            }
+        }
+
         // weight(1f)：网格吃掉顶栏与底栏之外的全部高度，翻页与滚动都在这块里发生
         Box(modifier = Modifier.weight(1f).fillMaxWidth().then(gridGestureModifier)) {
             HomeContent(
@@ -88,7 +118,11 @@ fun HomeScreen(
                 onOpenImage = onOpenImage,
                 onLoadMore = onLoadMore,
                 onRetry = onRetry,
-                onToggleArchive = onToggleArchive,
+                onEnterFolder = onEnterFolder,
+                onGoUp = onGoUp,
+                onJumpToCrumb = onJumpToCrumb,
+                onOpenArchive = onOpenArchive,
+                onCloseArchiveView = onCloseArchiveView,
                 onComposeZipGif = onComposeZipGif,
                 onZipGifLoaded = onZipGifLoaded,
                 onZipGifLoadFailed = onZipGifLoadFailed,
@@ -217,7 +251,11 @@ private fun HomeContent(
     onOpenImage: (ImageItem) -> Unit,
     onLoadMore: () -> Unit,
     onRetry: () -> Unit,
-    onToggleArchive: (String) -> Unit,
+    onEnterFolder: (String) -> Unit,
+    onGoUp: () -> Unit,
+    onJumpToCrumb: (Int) -> Unit,
+    onOpenArchive: (String) -> Unit,
+    onCloseArchiveView: () -> Unit,
     onComposeZipGif: (String) -> Unit,
     onZipGifLoaded: (String, String) -> Unit,
     onZipGifLoadFailed: (String, String) -> Unit,
@@ -261,7 +299,8 @@ private fun HomeContent(
             state = state,
             onOpenImage = onOpenImage,
             onLoadMore = onLoadMore,
-            onToggleArchive = onToggleArchive,
+            onEnterFolder = onEnterFolder,
+            onOpenArchive = onOpenArchive,
             onComposeZipGif = onComposeZipGif,
             onZipGifLoaded = onZipGifLoaded,
             onZipGifLoadFailed = onZipGifLoadFailed,
@@ -276,7 +315,8 @@ private fun ImageGrid(
     state: HomeUiState,
     onOpenImage: (ImageItem) -> Unit,
     onLoadMore: () -> Unit,
-    onToggleArchive: (String) -> Unit,
+    onEnterFolder: (String) -> Unit,
+    onOpenArchive: (String) -> Unit,
     onComposeZipGif: (String) -> Unit,
     onZipGifLoaded: (String, String) -> Unit,
     onZipGifLoadFailed: (String, String) -> Unit,
@@ -293,14 +333,29 @@ private fun ImageGrid(
         verticalArrangement = Arrangement.spacedBy(metrics.spacingXs),
         horizontalArrangement = Arrangement.spacedBy(metrics.spacingXs),
     ) {
-        items(count = state.gridImages.size) { index ->
-            val image = state.gridImages[index]
-            ImageCellBlock(
-                imageUrl = image.absoluteUrl,
-                name = image.name,
-                sizeText = image.sizeText,
-                onClick = { onOpenImage(image) },
-            )
+        // 网格条目三分支：图 / 文件夹 / 压缩包。渲染侧只按类型分发，
+        // 不需要知道内容来自 /api/dir、收藏列表还是包内 —— 这正是 GridEntry 抽象的价值
+        items(count = state.gridEntries.size) { index ->
+            when (val entry = state.gridEntries[index]) {
+                is GridEntry.Picture -> ImageCellBlock(
+                    imageUrl = entry.item.absoluteUrl,
+                    name = entry.item.name,
+                    sizeText = entry.item.sizeText,
+                    onClick = { onOpenImage(entry.item) },
+                )
+
+                is GridEntry.Folder -> FolderCard(
+                    name = entry.name,
+                    count = entry.count,
+                    onClick = { onEnterFolder(entry.name) },
+                )
+
+                is GridEntry.Archive -> ArchiveCard(
+                    name = entry.name,
+                    imageCount = entry.imageCount,
+                    onClick = { onOpenArchive(entry.path) },
+                )
+            }
         }
 
         // 尾部一：分页哨兵（占满整行），只有分类视图有分页
@@ -314,22 +369,6 @@ private fun ImageGrid(
             }
         }
 
-        // 尾部二：当前目录的压缩包区块（占满整行）。放在分页哨兵之后 —— 网页版也是
-        // "图片网格渲染完，再在 gallery 末尾追加 .zip-wrap"，位置与滚动顺序都要一致。
-        if (state.visibleArchives.isNotEmpty()) {
-            item(span = { GridItemSpan(maxLineSpan) }) {
-                ZipSection(
-                    state = state,
-                    buildZipImages = buildZipImages,
-                    onToggleArchive = onToggleArchive,
-                    onComposeZipGif = onComposeZipGif,
-                    onGifLoaded = onZipGifLoaded,
-                    onGifLoadFailed = onZipGifLoadFailed,
-                    onRetryZipGif = onRetryZipGif,
-                    onOpenImage = onOpenImage,
-                )
-            }
-        }
     }
 }
 

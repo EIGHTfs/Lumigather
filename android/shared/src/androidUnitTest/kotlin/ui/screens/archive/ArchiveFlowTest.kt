@@ -26,6 +26,7 @@ import ui.screens.download.ImageDownloader
 import ui.screens.settings.ServerAddressStore
 import ui.screens.state.ContentFilter
 import ui.screens.state.GifState
+import ui.screens.state.GridEntry
 import ui.screens.state.HomeStateHolder
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -50,6 +51,10 @@ private const val EMPTY_IMAGES_JSON = """
 """
 
 private const val STATUS_JSON = """{"ok":true,"version":"1.0.3"}"""
+
+private const val EMPTY_DIR_JSON = """
+{"root":"$SAMPLE_ROOT_PATH","path":"","sig":0,"subdirs":[],"images":[]}
+"""
 
 // 三个包：mod 包（hasIni + speed，编排序列帧）、普通图包、空包（无图片条目）
 private const val ZIPS_JSON = """
@@ -99,7 +104,8 @@ private class ArchiveTransport(
     override suspend fun get(url: String, query: Map<String, String>, timeoutMs: Long): HttpRawResponse =
         when {
             url.endsWith("/api/lumigather") -> HttpRawResponse(200, SITE_CONFIG_JSON, "application/json")
-            url.endsWith("/api/images") -> HttpRawResponse(200, EMPTY_IMAGES_JSON, "application/json")
+            // bootstrap 走 /api/dir：这里给"空目录"，压缩包断言只关心 zip/scan
+            url.endsWith("/api/dir") -> HttpRawResponse(200, EMPTY_DIR_JSON, "application/json")
             url.endsWith("/api/status") -> HttpRawResponse(200, STATUS_JSON, "application/json")
             url.endsWith("/api/favorites") -> HttpRawResponse(200, "[]", "application/json")
             url.endsWith("/api/uploaded") -> HttpRawResponse(200, "[]", "application/json")
@@ -283,7 +289,11 @@ class ArchiveFlowTest {
         // 无图但有包：内容其实在区块里，不能显示"还没有图片"
         val withZips = holder(ArchiveTransport())
         withZips.bootstrap()
-        assertTrue(withZips.state.gridImages.isEmpty())
+        // 网格现在是同质条目：没图不等于没内容（压缩包会作为 Archive 条目出现）
+        assertTrue(
+            withZips.state.gridEntries.none { entry -> entry is GridEntry.Picture },
+            "这层没有图片条目",
+        )
         assertFalse(withZips.state.isContentEmpty, "有压缩包就不算空目录")
 
         // 无图无包：真·空目录

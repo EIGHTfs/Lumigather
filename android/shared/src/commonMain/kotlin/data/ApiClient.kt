@@ -27,10 +27,12 @@ private const val ENDPOINT_LOGIN = "/login"
 private const val ENDPOINT_LOGOUT = "/logout"
 private const val ENDPOINT_FAVORITES = "/favorites"
 private const val ENDPOINT_UPLOADED = "/uploaded"
+private const val ENDPOINT_DIR = "/dir"
 private const val ENDPOINT_ZIP_SCAN = "/zip/scan"
 private const val ENDPOINT_ZIP_IMG = "/zip/img"
 private const val ENDPOINT_GIF = "/gif"
 private const val ENDPOINT_ZIP_GIF = "/zip/gif"
+
 
 // 压缩包/序列帧的参数名。注意这批接口**参数名不统一**（服务端实现就是这样）：
 // zip/scan 与 gif 用 dir，zip/img 与 zip/gif 用 path；写错后端只会回 400，不会报"参数名错了"。
@@ -266,6 +268,25 @@ class ApiClient(
         val body = JSONObject().put(BODY_SRC, MediaSrc.normalize(src)).toString()
         // 数组缺失时会返回空列表：服务端异常降级也不该让客户端崩
         return writeJson(ENDPOINT_FAVORITES, body, token, isDelete = true, parse = ::parseFavoritesField)
+    }
+
+    /**
+     * GET /api/dir?root=&path= —— 按需加载**单层**目录内容（本层图片 + 子目录及其统计）。
+     *
+     * @param root 分类根目录的绝对路径
+     * @param path 相对 root 的路径（""=根，子目录用 "Mods"、"Mods/.Mods" 这种形式）
+     *
+     * 刻意不用 `/api/directories`：它只给目录名，拿不到张数也判不出空目录，
+     * 而"是否显示为文件夹、显示几张"全靠这里的 count / hasSub / leafImages。
+     */
+    suspend fun fetchDir(root: String, path: String = ""): ApiResult<DirPage> {
+        if (root.isBlank()) return ApiResult.Err(ApiError.BadArgument("fetchDir 需要非空 root"))
+        val query = if (path.isEmpty()) {
+            mapOf(QUERY_ROOT to root)
+        } else {
+            mapOf(QUERY_ROOT to root, QUERY_PATH to path)
+        }
+        return getJson(ENDPOINT_DIR, query, ::parseDirPage)
     }
 
     /**

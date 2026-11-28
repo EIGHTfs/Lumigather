@@ -249,7 +249,12 @@ private fun MainScaffold(
                 onLoadMore = { scope.launch { stateHolder.loadMore() } },
                 onRetry = { scope.launch { stateHolder.retry() } },
                 onOpenSettings = stateHolder::openSettings,
-                onToggleArchive = stateHolder::toggleArchiveCollapsed,
+                // 目录层级导航：进/退/跳回，三件事都走挂起（要拉目录与扫包）
+                onEnterFolder = { name -> scope.launch { stateHolder.enterFolder(name) } },
+                onGoUp = { scope.launch { stateHolder.goUp() } },
+                onJumpToCrumb = { index -> scope.launch { stateHolder.jumpToCrumb(index) } },
+                onOpenArchive = stateHolder::openArchive,
+                onCloseArchiveView = stateHolder::closeArchiveView,
                 onComposeZipGif = stateHolder::requestZipGif,
                 onZipGifLoaded = stateHolder::onZipGifLoaded,
                 // 失败要问服务端原因（一次网络请求），所以走挂起 + actionScope

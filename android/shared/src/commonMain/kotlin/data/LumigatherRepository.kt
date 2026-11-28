@@ -85,6 +85,9 @@ class LumigatherRepository(private val api: ApiClient) {
 
     suspend fun loadUploaded(): ApiResult<List<UploadedEntry>> = api.fetchUploaded()
 
+    // 目录层级：按需加载单层（本层图片 + 子目录统计）
+    suspend fun loadDir(root: String, path: String): ApiResult<DirPage> = api.fetchDir(root, path)
+
     // 压缩包与序列帧：仓库只做转发，客户端不做任何解压/编码/ini 解析。
     suspend fun scanArchives(dir: String): ApiResult<List<ArchiveEntry>> = api.scanArchives(dir)
 

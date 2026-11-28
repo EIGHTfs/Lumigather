@@ -206,6 +206,9 @@ internal fun parseFavoritesField(json: JSONObject): List<FavoriteEntry> =
     json.optJSONArray(Field.FAVORITES).mapFavoriteEntries()
 
 // 收藏数组（GET 的裸数组，或写操作响应里的 favorites 字段）
+// 供 `/api/dir` 的 images / leafImages 复用同一份 ImageItem 解析（两处结构完全一致）
+internal fun JSONArray?.mapImageItems(): List<ImageItem> = mapObjects(::parseImageItem)
+
 internal fun JSONArray?.mapFavoriteEntries(): List<FavoriteEntry> = mapObjects(::parseFavoriteEntry)
 
 // 游客上传数组（GET /api/uploaded 的裸数组）
@@ -245,3 +248,42 @@ private fun <T> JSONArray?.mapObjects(transform: (JSONObject) -> T): List<T> {
     }
     return result
 }
+
+// /api/dir 的响应字段（与后端逐字一致；subdirs 里的 relPath 是相对分类根的路径）
+private const val DIR_FIELD_SUBDIRS = "subdirs"
+private const val DIR_FIELD_REL_PATH = "relPath"
+private const val DIR_FIELD_HAS_SUB = "hasSub"
+private const val DIR_FIELD_LEAF_IMAGES = "leafImages"
+private const val DIR_FIELD_MTIME = "mtime"
+private const val DIR_FIELD_SIG = "sig"
+
+/**
+ * `/api/dir` 响应 → 模型。
+ *
+ * count 的三种语义原样保留（>0 已知 / 0 确定无图 / <0 未知），**解析层不做任何过滤**：
+ * 过滤属于展示决策，放在状态层一次判定，避免"这里当 0、那里当未知"的不一致。
+ */
+internal fun parseDirPage(json: JSONObject): DirPage = DirPage(
+    root = json.optString(Field.ROOT, ""),
+    path = json.optString(Field.PATH, ""),
+    images = json.optJSONArray(Field.IMAGES).mapImageItems(),
+    sig = json.optDouble(DIR_FIELD_SIG, 0.0),
+    subdirs = json.optJSONArray(DIR_FIELD_SUBDIRS).let { array ->
+        if (array == null) {
+            emptyList()
+        } else {
+            (0 until array.length()).mapNotNull { index ->
+                array.optJSONObject(index)?.let { subdir ->
+                    DirSubdir(
+                        name = subdir.optString(Field.NAME, ""),
+                        relPath = subdir.optString(DIR_FIELD_REL_PATH, ""),
+                        count = subdir.optInt(Field.COUNT, 0),
+                        hasSub = subdir.optBoolean(DIR_FIELD_HAS_SUB, false),
+                        mtime = subdir.optLong(DIR_FIELD_MTIME, 0L),
+                        leafImages = subdir.optJSONArray(DIR_FIELD_LEAF_IMAGES).mapImageItems(),
+                    )
+                }
+            }
+        }
+    },
+)
