@@ -146,6 +146,9 @@ data class HomeUiState(
     // 已展开的压缩包（null = 在目录层）。展开后网格内容变成包内图片
     val openedArchive: ArchiveEntry? = null,
     val archiveImages: List<ImageItem> = emptyList(),
+    // 当前放大的那张图。key = 图片的绝对地址（不是文件名）：叶子目录摊平后同一层
+    // 可能出现同名文件，绝对地址才唯一；收藏/游客视图也天然有它，一套 key 通吃
+    val expandedEntryKey: String? = null,
     val leftSidebarOpen: Boolean = false,
     val rightSidebarOpen: Boolean = false,
     val selectedImage: ImageItem? = null,
@@ -296,6 +299,9 @@ data class HomeUiState(
             ContentFilter.Favorites -> "在图片详情里点「收藏」，就会出现在这里"
             ContentFilter.Guest -> "游客上传区目前是空的"
         }
+
+    // 这张图当前是否处于放大态（UI 只读它，不自己比对 key）
+    fun isExpanded(key: String): Boolean = expandedEntryKey == key
 
     // 当前详情图是否已收藏：按规范化 src 比对（原始写法可能是完整 URL，直接比会永远不相等）
     val isCurrentImageFavorite: Boolean
@@ -563,10 +569,11 @@ class HomeStateHolder(
             return
         }
 
-        // 换筛选：两侧栏都收、清掉选中图（旧图不属于新内容），提示也一并清掉
+        // 换筛选：两侧栏都收、清掉选中图与放大态（旧图不属于新内容），提示也一并清掉
         mutate {
             it.copy(
                 filter = target,
+                expandedEntryKey = null,
                 leftSidebarOpen = false,
                 rightSidebarOpen = false,
                 selectedImage = null,
@@ -671,6 +678,25 @@ class HomeStateHolder(
         updateController.reset()
     }
 
+    /**
+     * 点按一张图：在 1×1 与 3×3 之间切换（单选语义，同时只有一张放大）。
+     *
+     * 再点同一张就收起 —— 判断靠"key 相等"，不需要额外的开/关布尔字段：
+     * 一个字段既能表达"没放大"（null），也能表达"放大的是哪张"，不会出现两者矛盾。
+     */
+    fun toggleEntryExpanded(key: String) {
+        mutate { current ->
+            current.copy(expandedEntryKey = if (current.expandedEntryKey == key) null else key)
+        }
+    }
+
+    /** 清空放大态（切目录/切分类/切视图/换服务器都会用到）。 */
+    private fun clearExpandedEntry() {
+        if (state.expandedEntryKey != null) {
+            mutate { it.copy(expandedEntryKey = null) }
+        }
+    }
+
     // ---- 文件夹层级导航 ----
     //
     // 目录栈在浏览子状态机内部，这里只按"目标层级"编排两件事：加载该层目录内容、
@@ -711,6 +737,8 @@ class HomeStateHolder(
     }
 
     private suspend fun loadLayerAndArchives(targetRelativePath: String, loadLayer: suspend () -> Unit) {
+        // 换层必须先清放大态：新目录里那张图根本不存在，留着会"刚进目录就有一张莫名放大"
+        clearExpandedEntry()
         val absoluteDir = absDirPath(targetRelativePath)
         coroutineScope {
             launch { loadLayer() }

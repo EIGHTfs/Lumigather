@@ -8,7 +8,10 @@ import androidx.compose.runtime.setValue
 import com.tencent.kuikly.compose.coil3.rememberAsyncImagePainter
 import com.tencent.kuikly.compose.foundation.Image
 import com.tencent.kuikly.compose.foundation.background
+import com.tencent.kuikly.compose.foundation.ExperimentalFoundationApi
+import com.tencent.kuikly.compose.foundation.border
 import com.tencent.kuikly.compose.foundation.clickable
+import com.tencent.kuikly.compose.foundation.combinedClickable
 import com.tencent.kuikly.compose.foundation.layout.Box
 import com.tencent.kuikly.compose.foundation.layout.aspectRatio
 import com.tencent.kuikly.compose.foundation.layout.fillMaxSize
@@ -47,6 +50,9 @@ fun ImageCellBlock(
     sizeText: String = "",
     stateOverride: ImageCellState? = null,
     onClick: (() -> Unit)? = null,
+    onLongClick: (() -> Unit)? = null,
+    // 激活态（放大中的那张）：发亮描边。颜色取主题 primary，不新造色值
+    highlighted: Boolean = false,
 ) {
     val colors = AppTheme.colors
     val metrics = AppTheme.metrics
@@ -67,7 +73,14 @@ fun ImageCellBlock(
             .aspectRatio(1f)
             .clip(shape)
             .background(colors.container)
-            .then(if (onClick == null) Modifier else Modifier.clickable(onClick = onClick)),
+            .then(
+                if (highlighted) {
+                    Modifier.border(metrics.thicknessRule * HIGHLIGHT_BORDER_SCALE, colors.primary, shape)
+                } else {
+                    Modifier
+                }
+            )
+            .then(gestureModifier(onClick = onClick, onLongClick = onLongClick))
     ) {
         // Image 必须无条件挂在树里：Kuikly 的 AsyncImagePainter 靠「被 Image 绘制」才发起加载。
         // 若按状态条件渲染（只有 Ready 才挂 Image），会形成死锁 —— 不挂 Image 就不加载，
@@ -115,3 +128,24 @@ fun ImageCellBlock(
         }
     }
 }
+
+/**
+ * 点按 / 长按的组合手势。
+ *
+ * 为什么走 `combinedClickable`：Kuikly 的 `Clickable.kt` 里只有它把 `onLongClick` 接到了
+ * `detectTapGestures(onLongPress = ...)`；`Modifier.clickable` 没有长按参数，
+ * 而 `pointerInput { detectTapGestures(...) }` 虽然底层存在，直接用会丢掉 clickable 的
+ * indication/语义（无障碍节点上的"长按"动作）。
+ *
+ * 只在确实需要长按时才升到 combinedClickable：它带 `@ExperimentalFoundationApi`，
+ * 普通点击继续走稳定的 `clickable`，把实验面收窄到真正用到的那类卡片。
+ */
+@OptIn(ExperimentalFoundationApi::class)
+private fun gestureModifier(onClick: (() -> Unit)?, onLongClick: (() -> Unit)?): Modifier = when {
+    onLongClick == null && onClick == null -> Modifier
+    onLongClick == null -> Modifier.clickable(onClick = onClick ?: {})
+    else -> Modifier.combinedClickable(onClick = onClick ?: {}, onLongClick = onLongClick)
+}
+
+// 激活描边宽度是常规分隔线的 2 倍：1px 在浅色底上几乎看不出"这张被选中了"
+private const val HIGHLIGHT_BORDER_SCALE = 2

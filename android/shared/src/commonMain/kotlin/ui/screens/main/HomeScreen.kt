@@ -51,6 +51,8 @@ fun HomeScreen(
     onOpenLeftSidebar: () -> Unit,
     onSelectFilter: (ContentFilter) -> Unit,
     onOpenImage: (ImageItem) -> Unit,
+    // 点按图片 = 在 1×1 与 3×3 之间切换（长按才是打开右边栏，走 onOpenImage）
+    onTogglePictureExpand: (String) -> Unit,
     onLoadMore: () -> Unit,
     onRetry: () -> Unit,
     onOpenSettings: () -> Unit,
@@ -116,6 +118,7 @@ fun HomeScreen(
             HomeContent(
                 state = state,
                 onOpenImage = onOpenImage,
+                onTogglePictureExpand = onTogglePictureExpand,
                 onLoadMore = onLoadMore,
                 onRetry = onRetry,
                 onEnterFolder = onEnterFolder,
@@ -249,6 +252,8 @@ private fun CategoryChipsRow(
 private fun HomeContent(
     state: HomeUiState,
     onOpenImage: (ImageItem) -> Unit,
+    // 点按图片 = 在 1×1 与 3×3 之间切换（长按才是打开右边栏，走 onOpenImage）
+    onTogglePictureExpand: (String) -> Unit,
     onLoadMore: () -> Unit,
     onRetry: () -> Unit,
     onEnterFolder: (String) -> Unit,
@@ -298,6 +303,7 @@ private fun HomeContent(
         else -> ImageGrid(
             state = state,
             onOpenImage = onOpenImage,
+            onTogglePictureExpand = onTogglePictureExpand,
             onLoadMore = onLoadMore,
             onEnterFolder = onEnterFolder,
             onOpenArchive = onOpenArchive,
@@ -314,6 +320,7 @@ private fun HomeContent(
 private fun ImageGrid(
     state: HomeUiState,
     onOpenImage: (ImageItem) -> Unit,
+    onTogglePictureExpand: (String) -> Unit,
     onLoadMore: () -> Unit,
     onEnterFolder: (String) -> Unit,
     onOpenArchive: (String) -> Unit,
@@ -335,20 +342,38 @@ private fun ImageGrid(
     ) {
         // 网格条目三分支：图 / 文件夹 / 压缩包。渲染侧只按类型分发，
         // 不需要知道内容来自 /api/dir、收藏列表还是包内 —— 这正是 GridEntry 抽象的价值
-        items(count = state.gridEntries.size) { index ->
+        // span 按条目算：放大的那张跨满整行（3 列），配合 aspectRatio(1f) 宽 3 列即高 3 行
+        items(
+            count = state.gridEntries.size,
+            span = { index ->
+                val entry = state.gridEntries[index]
+                if (entry is GridEntry.Picture && state.isExpanded(entry.item.absoluteUrl)) {
+                    GridItemSpan(maxLineSpan)
+                } else {
+                    GridItemSpan(SINGLE_CELL_SPAN)
+                }
+            },
+        ) { index ->
             when (val entry = state.gridEntries[index]) {
-                is GridEntry.Picture -> ImageCellBlock(
-                    imageUrl = entry.item.absoluteUrl,
-                    name = entry.item.name,
-                    sizeText = entry.item.sizeText,
-                    onClick = { onOpenImage(entry.item) },
-                )
+                is GridEntry.Picture -> {
+                    val entryKey = entry.item.absoluteUrl
+                    ImageCellBlock(
+                        imageUrl = entry.item.absoluteUrl,
+                        name = entry.item.name,
+                        sizeText = entry.item.sizeText,
+                        highlighted = state.isExpanded(entryKey),
+                        // 点按 = 放大/收起；长按 = 打开右边栏（原点击行为，不能丢）
+                        onClick = { onTogglePictureExpand(entryKey) },
+                        onLongClick = { onOpenImage(entry.item) },
+                    )
+                }
 
                 is GridEntry.Folder -> FolderCard(
                     name = entry.name,
                     count = entry.count,
                     onClick = { onEnterFolder(entry.name) },
                 )
+
 
                 is GridEntry.Archive -> ArchiveCard(
                     name = entry.name,
@@ -464,3 +489,6 @@ private fun buildStatusLine(state: HomeUiState): String {
 
 // 站点标题兜底。正常情况后端一定给 title，这里只是防止加载中显示空白胶囊。
 private const val DEFAULT_TITLE = "拾光集"
+
+// 未放大的条目占 1 格；放大时跨满整行（列数由 HomeLayout.gridColumns 决定）
+private const val SINGLE_CELL_SPAN = 1

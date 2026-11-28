@@ -246,6 +246,8 @@ private fun MainScaffold(
                 onOpenLeftSidebar = stateHolder::openLeftSidebar,
                 onSelectFilter = { filter -> scope.launch { stateHolder.selectFilter(filter) } },
                 onOpenImage = stateHolder::openDetail,
+                // 点按 = 切换 1×1 / 3×3（长按才走 openDetail 打开右边栏）
+                onTogglePictureExpand = stateHolder::toggleEntryExpanded,
                 onLoadMore = { scope.launch { stateHolder.loadMore() } },
                 onRetry = { scope.launch { stateHolder.retry() } },
                 onOpenSettings = stateHolder::openSettings,

@@ -65,3 +65,4 @@ android/shared/src/androidUnitTest/kotlin/ui/screens/auth/AuthFlowTest.kt : path
 android/shared/src/androidUnitTest/kotlin/ui/screens/favorites/FavoriteFlowTest.kt : paths/hardcoded-absolute-path
 android/shared/src/androidUnitTest/kotlin/ui/screens/archive/ArchiveFlowTest.kt : paths/hardcoded-absolute-path
 android/shared/src/androidUnitTest/kotlin/ui/screens/dirbrowse/DirBrowseFlowTest.kt : paths/hardcoded-absolute-path
+android/shared/src/androidUnitTest/kotlin/ui/screens/gridgesture/GridInteractionTest.kt : paths/hardcoded-absolute-path

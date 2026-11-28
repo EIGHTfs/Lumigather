@@ -166,6 +166,7 @@ class BrowseController(
                 canGoUp = false,
                 openedArchive = null,
                 archiveImages = emptyList(),
+                expandedEntryKey = null,
                 filter = ContentFilter.Category(""),
                 categoryError = null,
                 pageError = null,
@@ -224,15 +225,25 @@ class BrowseController(
         publishBreadcrumbs(categoryName)
 
         when (val result = activeRepository.loadDir(rootPath, relativePath)) {
-            is ApiResult.Ok -> channel.mutate {
-                it.copy(
-                    dirEntries = mapDirToEntries(result.value),
-                    isLoadingPage = false,
-                    // dir 接口不分页：本层一次给全，所以不存在"还有更多"
-                    hasMore = false,
-                    loadedCount = result.value.images.size,
-                    totalCount = result.value.images.size,
-                )
+            is ApiResult.Ok -> {
+                val entries = mapDirToEntries(result.value)
+                // 换层后若原来放大的那张已不在本层（或换了目录），必须清空：
+                // 否则会留下一张"看不见的图"仍在放大集合里，界面表现为下次进目录莫名放大
+                val expandedKey = channel.state.expandedEntryKey
+                val stillPresent = expandedKey != null && entries.any { entry ->
+                    entry is GridEntry.Picture && entry.item.absoluteUrl == expandedKey
+                }
+                channel.mutate {
+                    it.copy(
+                        dirEntries = entries,
+                        expandedEntryKey = if (stillPresent) expandedKey else null,
+                        isLoadingPage = false,
+                        // dir 接口不分页：本层一次给全，所以不存在"还有更多"
+                        hasMore = false,
+                        loadedCount = result.value.images.size,
+                        totalCount = result.value.images.size,
+                    )
+                }
             }
 
             is ApiResult.Err -> channel.mutate {

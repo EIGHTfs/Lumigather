@@ -86,6 +86,8 @@ class ArchiveController(
             it.copy(
                 openedArchive = entry,
                 archiveImages = zipImagesOf(entry),
+                // 换内容就清放大：包内图片与目录图片是两套绝对地址，留着旧 key 无意义
+                expandedEntryKey = null,
                 // 展开包 = 进入下一层，返回上级要能回到目录层
                 canGoUp = true,
             )
@@ -94,7 +96,9 @@ class ArchiveController(
 
     /** 收起当前包，回到目录层。 */
     fun closeArchive() {
-        channel.mutate { it.copy(openedArchive = null, archiveImages = emptyList()) }
+        channel.mutate {
+            it.copy(openedArchive = null, archiveImages = emptyList(), expandedEntryKey = null)
+        }
     }
 
     /** 折叠/展开某个包。收起状态留在状态里，切分类回来仍然保留。 */
