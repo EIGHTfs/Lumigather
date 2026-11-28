@@ -50,6 +50,9 @@ private const val STATUS_JSON = """{"ok":true,"version":"1.0.3"}"""
 /**
  * 10 个包，其中 6 个 images 为空（真实数据里空包占多数：实测 108 个包里 70 个为空）。
  * 留下的 4 个各有 1 张图 —— 所以网格里应该出现 4 个图片条目。
+ *
+ * fixture 的 images **必须是对象数组** `{name,size}`：服务端就是这样返回的
+ * （`server/lib/archive.js:203`）。写成字符串数组会掩盖"解析出空名字 → 图片全不加载"的真实故障。
  */
 private fun zipsJson(): String = buildString {
     append("""{"ok":true,"zips":[""")
@@ -57,7 +60,7 @@ private fun zipsJson(): String = buildString {
     repeat(4) { index ->
         append(
             """{"path":"$SAMPLE_ROOT_PATH/pack-$index.zip","name":"pack-$index.zip",""" +
-                """"images":["图 $index.png"],"hasIni":false,"speed":null},""",
+                """"images":[{"name":"图 $index.png","size":1024}],"hasIni":false,"speed":null},""",
         )
     }
     // 6 个空包
@@ -161,6 +164,12 @@ class ArchiveFlowTest {
             "包路径要按绝对路径编码，实际：$url",
         )
         assertTrue(url.contains("file="), "要带包内条目名，实际：$url")
+        // 关键回归：file= 后面必须是**真实条目名**（曾因把对象数组按字符串解析，
+        // 这里拿到的是空串，于是整批包内图请求 400、界面全部"无法加载"）
+        assertTrue(
+            url.contains("file=" + UrlBuilder.percentEncode("图 0.png")),
+            "file 参数必须是包内真实条目名，实际：$url",
+        )
         assertTrue(url.contains("%E5%9B%BE"), "中文条目名要按 UTF-8 编码，实际：$url")
     }
 

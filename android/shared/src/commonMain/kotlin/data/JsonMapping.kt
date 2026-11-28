@@ -171,7 +171,8 @@ internal fun parseFavoriteMutation(json: JSONObject): FavoriteMutation = Favorit
 /**
  * 压缩包扫描结果（`{ok:true, zips:[...]}`）→ 模型列表。
  *
- * images 是**包内条目名**（未编码），拼 URL 时才编码 —— 在解析阶段编码会让名字与包内真实条目对不上。
+ * images 是对象数组（`{name,size}`，服务端 `server/lib/archive.js:203` 的 `{ name, size }`），
+ * 名字是包内相对路径（可含子目录），拼 URL 时才编码 —— 在解析阶段编码会让名字与包内真实条目对不上。
  * speed 只有 hasIni 时服务端才给，缺字段必须是 null 而不是 0.0（0 会让界面显示"倍速 0"）。
  */
 internal fun parseArchiveList(json: JSONObject): List<ArchiveEntry> {
@@ -183,7 +184,10 @@ internal fun parseArchiveList(json: JSONObject): List<ArchiveEntry> {
             ArchiveEntry(
                 path = item.optString(Field.PATH, ""),
                 name = item.optString(Field.NAME, ""),
-                images = item.optJSONArray(Field.IMAGES).toStringList(),
+                // 服务端的 images 是**对象数组**（{name,size}，见 server/lib/archive.js:203），
+                // 不是字符串数组：按 optString 解析会得到一串空串，拼出的 /api/zip/img?file=
+                // 全空 → 服务端 400 → 包内图全部"无法加载"。这里必须按对象解析。
+                images = item.optJSONArray(Field.IMAGES).mapObjects(::parseArchiveImage),
                 hasIni = item.optBoolean(Field.HAS_INI, false),
                 speed = if (item.has(Field.SPEED)) item.optDouble(Field.SPEED) else null,
             ),
@@ -191,6 +195,13 @@ internal fun parseArchiveList(json: JSONObject): List<ArchiveEntry> {
     }
     return result
 }
+
+// 包内一张图：{ name, size }。name 原样保留（未编码的包内相对路径）；
+// size 是**数字字节数**（图片列表里的 size 是字符串 "1.0 KB"，两者同名不同型，别混用）
+internal fun parseArchiveImage(json: JSONObject): ArchiveImage = ArchiveImage(
+    name = json.optString(Field.NAME, ""),
+    sizeBytes = json.optLong(Field.SIZE, 0L),
+)
 
 // 写操作响应里的 favorites 数组。ApiClient 需要它但 Field 是文件私有的，
 // 所以在这里给一个小出口，而不是把 Field 提升为 internal（那会让字段名常量四处可用）。

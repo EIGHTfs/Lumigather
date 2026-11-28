@@ -66,7 +66,7 @@ private const val DIR_MODS_JSON = """
 // 压缩包：一个含 2 张图、一个空包（空包不该出现在网格里）
 private const val ZIPS_JSON = """
 {"ok":true,"zips":[
-  {"path":"$SAMPLE_ROOT_PATH/mod.zip","name":"mod.zip","images":["a.png","b.png"],"hasIni":true},
+  {"path":"$SAMPLE_ROOT_PATH/mod.zip","name":"mod.zip","images":[{"name":"a.png","size":100},{"name":"b.png","size":100}],"hasIni":true},
   {"path":"$SAMPLE_ROOT_PATH/empty.zip","name":"empty.zip","images":[],"hasIni":false}
 ]}
 """

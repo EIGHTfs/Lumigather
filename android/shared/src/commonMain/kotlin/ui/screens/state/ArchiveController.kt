@@ -95,19 +95,21 @@ class ArchiveController(
     /**
      * 把包内条目名拼成可直接渲染的图片模型。
      *
-     * 条目名在 [LumigatherRepository.zipImageUrl] 里做 RFC 3986 编码；是否安全（含 `..`）
+     * 条目名（[com.eightfs.lumigather.data.ArchiveImage.name]，包内相对路径，可含子目录）
+     * 在 [LumigatherRepository.zipImageUrl] 里做 RFC 3986 编码；是否安全（含 `..`）
      * 由服务端判定并回 400 —— 客户端不再重复实现一遍路径穿越防护。
      */
     private fun zipImagesOf(entry: ArchiveEntry): List<ImageItem> {
         val activeRepository = repositoryProvider() ?: return emptyList()
-        return entry.images.map { entryName ->
+        return entry.images.map { archiveImage ->
             ImageItem(
-                name = entryName.substringAfterLast('/'),
-                path = "${entry.path}/$entryName",
+                // 网格里显示文件名即可；完整包内路径放 path，详情页能看到来源
+                name = archiveImage.name.substringAfterLast('/'),
+                path = "${entry.path}/${archiveImage.name}",
                 relativeUrl = "",
                 sizeText = "",
                 modifiedIso = "",
-                absoluteUrl = activeRepository.zipImageUrl(entry.path, entryName),
+                absoluteUrl = activeRepository.zipImageUrl(entry.path, archiveImage.name),
             )
         }
     }

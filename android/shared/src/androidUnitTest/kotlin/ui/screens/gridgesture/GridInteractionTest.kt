@@ -53,7 +53,7 @@ private const val DIR_MODS_JSON = """
 """
 
 private const val ZIPS_JSON = """
-{"ok":true,"zips":[{"path":"$SAMPLE_ROOT_PATH/mod.zip","name":"mod.zip","images":["a.png"],"hasIni":false}]}
+{"ok":true,"zips":[{"path":"$SAMPLE_ROOT_PATH/mod.zip","name":"mod.zip","images":[{"name":"a.png","size":100}],"hasIni":false}]}
 """
 
 private class FixedAddressStore : ServerAddressStore {

@@ -16,10 +16,26 @@ package com.eightfs.lumigather.data
  * @param speed ini 里声明的 $speed（仅 hasIni 时可能有值）；客户端不拿它算帧间隔，
  *   只在界面上作为"动画倍速"的说明信息展示
  */
+/**
+ * 包内一张图片。
+ *
+ * 服务端 `/api/zip/scan` 的 `images` 是**对象数组**（`server/lib/archive.js:203`）：
+ * `entries.filter(...).map(e => ({ name: e.name, size: e.uncompSize }))`。
+ * 不是字符串数组 —— 按字符串解析会拿到一串空串，之后拼出来的 `/api/zip/img?file=` 全空，
+ * 表现就是"压缩包里的图全都不加载"。（这个坑真踩过：fixture 自己编成字符串数组，测试全绿。）
+ *
+ * @param name 包内相对路径（可含子目录，如 `雷电芽衣（中）/frame0.png`），直接作为 file 参数
+ * @param sizeBytes 解压后大小；0 表示服务端没给
+ */
+data class ArchiveImage(
+    val name: String = "",
+    val sizeBytes: Long = 0L,
+)
+
 data class ArchiveEntry(
     val path: String = "",
     val name: String = "",
-    val images: List<String> = emptyList(),
+    val images: List<ArchiveImage> = emptyList(),
     val hasIni: Boolean = false,
     val speed: Double? = null,
 )
