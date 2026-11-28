@@ -485,6 +485,8 @@
             activeDir = d.path;
             const rest = urlDir.slice(rootBasename.length).replace(/^\//, "");
             currentPath = rest;
+            // 直达链接与记忆恢复是同一类风险：路径可能已经不存在。共用同一套回退。
+            navRestoredFromMemory = rest !== "";
             activeFilter = d.category || "all";
             break;
           }
@@ -1016,6 +1018,9 @@
 
   // 每个根目录各自记录的 currentPath（切换目录时恢复）
   let navByDir = {};   // rootPath -> currentPath
+  // 从"记忆"恢复路径时置位：用于区分「恢复的旧路径可能已失效」与「用户主动点进真空目录」。
+  // 只有前者才允许自动回退 —— 后者回退会让用户根本看不到真空目录。
+  let navRestoredFromMemory = false;
 
   function restoreNav() {
     try {
@@ -1026,6 +1031,7 @@
       if (o && o.activeDir && directories.some(d => d.path === o.activeDir)) {
         activeDir = o.activeDir;
         currentPath = navByDir[activeDir] || "";
+        navRestoredFromMemory = currentPath !== "";
       }
     } catch (_) {}
   }
@@ -1036,6 +1042,7 @@
     if (activeDir) navByDir[activeDir] = currentPath;
     activeDir = newDir;
     currentPath = navByDir[newDir] || "";  // 恢复该目录上次路径（默认根目录）
+    navRestoredFromMemory = currentPath !== "";   // 同上：这次恢复的路径也可能是旧的
     activeFilter = "all";
     saveNav();
     pushNavHistory();
@@ -1419,6 +1426,19 @@
       renderBreadcrumb(guestImgs, guestImgs.length);
       return;
     }
+    // 恢复自记忆的路径可能已失效（目录被删/改名）。此时 currentScope() 会算出空层，
+    // 用户只看到一片空白、也不知道能往上退。这里自动退一级（只退一级，避免连发渲染）。
+    // 只在"从记忆恢复"时生效：用户主动点进的真空目录必须保持原样，不能被弹走。
+    if (navRestoredFromMemory && currentPath) {
+      const restoredScope = currentScope();
+      if (!restoredScope.subDirs.length && !restoredScope.images.length) {
+        const parentPath = currentPath.split("/").slice(0, -1).join("/");
+        currentPath = parentPath;
+        saveNav();
+      }
+      navRestoredFromMemory = false;   // 无论是否回退，校验只做一次
+    }
+
     // 自动下钻：当前层无直图且只有一个折叠链子目录（如 Mods → Mods/.Mods）→ 直接进入内部
     let guard = 0;
     while (guard++ < 40) {
