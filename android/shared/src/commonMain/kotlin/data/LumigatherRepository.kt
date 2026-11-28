@@ -207,8 +207,6 @@ class LumigatherRepository(private val api: ApiClient) {
     }
 
     // 目录浏览（次级页面用）：列某一级下的子目录名字。
-    suspend fun loadDirectory(rootPath: String): ApiResult<DirectoryListing> =
-        api.fetchDirectories(rootPath)
 
     // 单张图的绝对地址。模型里通常已经填好，这里给"只有 relativeUrl 的旧对象"兜底。
     fun mediaUrl(item: ImageItem): String = api.mediaUrl(item)

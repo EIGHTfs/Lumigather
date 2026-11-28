@@ -117,13 +117,6 @@ class ApiClient(
     suspend fun fetchSiteConfig(): ApiResult<SiteConfig> =
         getJson(ENDPOINT_SITE_CONFIG, emptyMap(), ::parseSiteConfig)
 
-    // GET /api/directories?root=...：某一级目录下的子项名字列表。
-    // root 为空直接本地拦掉——空 root 发出去会命中后端"回落到 fsRoot"的行为，回来的数据看着正常
-    // 但其实是另一个目录，属于静默错误。
-    suspend fun fetchDirectories(root: String): ApiResult<DirectoryListing> {
-        if (root.isBlank()) return ApiResult.Err(ApiError.BadArgument("fetchDirectories 需要非空 root"))
-        return getJson(ENDPOINT_DIRECTORIES, mapOf(QUERY_ROOT to root), ::parseDirectoryListing)
-    }
 
     // GET /api/images?root=...&recursive=...&offset=...&limit=...：一页图片。
     // recursive 默认 true：本 App 的浏览单位是"分类"，要的是分类下所有层的图。

@@ -232,7 +232,7 @@ class ApiClientTest {
     fun errorFieldInsideOkResponseIsTreatedAsFailure() = runBlocking {
         // 后端存在 200 + {"error": ...} 的路径。当成成功会把失败显示成"空目录"。
         val transport = okJson("""{"error":"EACCES: permission denied"}""")
-        val result = ApiClient("$SAMPLE_BASE_URL", transport).fetchDirectories("/x")
+        val result = ApiClient("$SAMPLE_BASE_URL", transport).fetchStatus()
         val error = (result as ApiResult.Err).error
         assertTrue(error is ApiError.Http)
         assertEquals("EACCES: permission denied", (error as ApiError.Http).serverMessage)

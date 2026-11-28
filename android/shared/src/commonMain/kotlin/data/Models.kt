@@ -64,13 +64,6 @@ data class SiteConfig(
  * 不是数量。名字照抄 limit 会让人误以为是分页条数，因此这里改名。
  * [items] 是纯名字数组（没有子项对象），子项是否可展开要再发一次请求才知道。
  */
-data class DirectoryListing(
-    val root: String = "",
-    val items: List<String> = emptyList(),
-    val limitPath: String = "",
-    val clamped: Boolean = false,
-    val canUp: Boolean = false
-)
 
 /**
  * 一张图片（对应 images[]）。

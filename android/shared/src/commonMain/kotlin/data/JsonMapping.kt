@@ -98,14 +98,6 @@ private fun parseDirectoryRef(json: JSONObject): DirectoryRef = DirectoryRef(
     category = json.optString(Field.CATEGORY, "")
 )
 
-internal fun parseDirectoryListing(json: JSONObject): DirectoryListing = DirectoryListing(
-    root = json.optString(Field.ROOT, ""),
-    items = json.optJSONArray(Field.ITEMS).toStringList(),
-    // 后端这个字段叫 limit，值是路径字符串。照抄名字会误导成"每页条数"。
-    limitPath = json.optString(Field.LIMIT, ""),
-    clamped = json.optBoolean(Field.CLAMPED, false),
-    canUp = json.optBoolean(Field.CAN_UP, false)
-)
 
 internal fun parsePagedImages(json: JSONObject): PagedImages = PagedImages(
     path = json.optString(Field.PATH, ""),
